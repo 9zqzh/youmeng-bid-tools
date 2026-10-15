@@ -1,107 +1,40 @@
 #!/usr/bin/env python3
-"""优盟标书工具（Skill 版，HTTP 瘦客户端）。
+"""优盟标书工具（技能本地版）。
 
-不自带任何业务代码，只通过 HTTP 调用「优盟标书工具服务」（bid-mcp）的 REST 接口：
-  GET  /api/qualifications
-  POST /api/qualify-match
-  POST /api/generate-draft
-  POST /api/rejection/init | /apply | /finalize | /export     GET /api/rejection/state
-  POST /api/facts/init | /update | /render
-  POST /api/consistency/build | /repair
-  POST /api/project/init | /advance        GET /api/project/state | /next | /stages
-  GET  /api/figure/types | /status         POST /api/figure/render
-  GET  /api/template/presets | /list       POST /api/template/get | /save | /delete
-  GET  /api/html/spec                      POST /api/html/validate
-  GET  /api/layout/metrics                 POST /api/layout/plan
-  POST /api/duplicate/analyze
-  POST /api/review/typo | /logic | /export
+**不需要任何服务**：本脚本直接调用随技能一起分发的实现（`scripts/bidagent/`），
+在技能沙箱里就地跑。实现由后端仓库 `services/` 同步而来（见 `tools/sync_from_backend.py`）。
 
-子命令：
-  list                                           列出企业资质清单
-  match  --requirements <JSON|@file>             招标要求 × 资质逐条比对
-  draft  --project <名称> --sections <JSON|@file> [--qualifications q15,q06]
-         [--bid-no X] [--final]                   生成两册 Word 初稿
-  reject-init   --items <JSON|@file> [--project X] [--bid-no X] [--documents <JSON|@file>]
-                                                 创建废标项检查会话
-  reject-apply  --session <id> --patch <JSON|@file>
-                                                 提交一个片段的检查增量
-  reject-finalize --session <id>                 收尾并输出检查报告
-  reject-export --session <id>                   导出废标项检查 xlsx
-  reject-state  --session <id>                   查看会话当前状态
-  facts-init    --facts <JSON|@file> [--project X] [--bid-no X] [--no-manifest]
-                                                 建立「全局事实」清单（注入资质清单锁定事实）
-  facts-update  --facts-id <id> --facts <JSON|@file> [--no-manifest]
-                                                 人工评审后全量替换事实清单
-  facts-render  --facts-id <id>                  取事实注入块（逐节生成正文时用）
-  cons-build    --sections <JSON|@file> --extractions <JSON|@file> [--facts-id X]
-                                                 一致性审计：建立台账并找出冲突
-  cons-repair   --ledger <id> --rules <JSON|@file>
-                                                 一致性审计：按统一口径生成逐节修复任务
-  project-init  [--project X] [--bid-no X]        创建标书项目（串起全链路）
-  project-state --project-id <id>                查看项目阶段与关卡结论
-  project-next  --project-id <id>                下一步该做什么
-  project-advance --project-id <id> --stage <key> [--artifacts <JSON|@file>] [--force]
-                                                 声明某阶段完成并推进（带关卡校验）
-  fig-types                                      列出可渲染的配图类型与渲染方式
-  fig-status                                     配图渲染环境自检
-  fig-render    --figures <JSON|@file>           把 Mermaid/HTML 渲染成 PNG（返回下载链接）
-  template-presets                               列出导出模板预设
-  template-list                                  列出已保存的自定义模板
-  template-get  [--template <名>]                把预设/模板名解析成完整配置
-  template-save --name X --template <JSON|@file> 保存自定义导出模板
-  template-delete --name X                       删除自定义模板
-  html-spec                                      受限 HTML 白名单与示例
-  html-validate --html <字符串|@文件>            校验一段受限 HTML（出稿前先自查）
-  layout-metrics [--template <名>]               算出一套模板下每页能装多少字
-  layout-plan   --sections <JSON|@file> [--template <名>] [--total-words N]
-                [--section-words N] [--min-words N] [--max-words N]
-                                                 字数配额 + 版面估算 + 偏差与建议
-  dup-analyze   --documents <JSON|@file> [--tender <文本|@文件>] [--tender-path <路径>]
-                                                 标书查重（确定性：白名单剔除 + 分层比对 + 候选对）
-  typo-check    --candidates <JSON|@file> [--source <文本|@文件> | --source-path <路径>]
-                [--tender <文本|@文件> | --tender-path <路径>]
-                                                 回验错别字（定位不到的直接排除）
-  logic-check   --segments <JSON|@file> --extractions <JSON|@file>
-                                                 逻辑谬误检查（跨段前后矛盾）
-  check-export  [--rejection-session <id>] [--typo-id <id>] [--logic-id <id>] [--project X]
-                                                 把 废标项/错别字/逻辑 导出到同一份 xlsx
+子命令与参数名与「thin client 版」保持一致，只有两点不同：
+- 不再有下载链接 —— 产物直接写到**产物目录**（默认 `/workspace/output`），
+  返回体里给的是 `path`；用户会在回复里看到可下载的文件；
+- 出错时向 **stdout** 打印 `{"success": false, "error": "..."}` 并以退出码 1 结束，
+  便于调用方统一解析。
 
-仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
+依赖见 `requirements.txt`（python-docx / openpyxl / lxml / Pillow / pypdf / pypdfium2 / httpx，
+配图渲染另需 playwright + chromium）。
 
-环境变量：
-  BID_API_BASE   服务地址，默认 http://bid-mcp:18999
-                 （跨机访问时改成 http://<服务器IP>:18999）
+环境变量（都有默认值，一般不用设）：
+  BID_OUTPUT_DIR   产物目录           默认 /workspace/output
+  BID_STATE_DIR    状态目录           默认 <技能目录>/.state（不可写则 /workspace/.bid-state）
+  BID_INPUT_DIR    输入目录           默认 /workspace/input（放 manifest.json 与资质原件）
+  BID_MANIFEST_PATH 资质清单路径      默认在输入目录里找 manifest.json
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import urllib.error
-import urllib.request
+from pathlib import Path
 
-BASE = (os.environ.get("BID_API_BASE") or "http://bid-mcp:18999").rstrip("/")
-TIMEOUT = int(os.environ.get("BID_API_TIMEOUT", "180"))
+# 让 `bidagent` 可被导入：脚本在 <技能>/scripts/ 下，运行时该目录即 sys.path[0]；
+# 直接用 python 执行时通常已满足，这里再兜一层（远程执行的 cwd 可能不是脚本目录）。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from bidagent import bid_api  # noqa: E402
+from bidagent.settings import settings  # noqa: E402
 
-def _request(method: str, path: str, payload: dict | None = None):
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(BASE + path, data=data, method=method,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = json.loads(exc.read().decode("utf-8"))
-        except Exception:  # noqa: BLE001
-            detail = {"error": f"HTTP {exc.code}"}
-        raise SystemExit(json.dumps({"success": False, **detail}, ensure_ascii=False))
-    except urllib.error.URLError as exc:
-        raise SystemExit(json.dumps(
-            {"success": False, "error": f"无法连接 {BASE}：{exc.reason}（用 BID_API_BASE 指定服务地址）"},
-            ensure_ascii=False))
+# 会产出文件的子命令：返回体里补 output_dir，便于调用方告知用户去哪里取
+ARTIFACT_COMMANDS = ("draft", "reject-export", "fig-render", "check-export")
 
 
 def _load_json_arg(value: str):
@@ -111,15 +44,17 @@ def _load_json_arg(value: str):
 
 
 def _load_text_arg(value: str) -> str:
-    """HTML 等纯文本参数：支持 @文件 或直接给字符串。"""
+    """HTML / 正文等纯文本参数：支持 @文件 或直接给字符串。"""
     if value.startswith("@"):
         return open(value[1:], encoding="utf-8").read()
     return value
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(prog="bid_tools", description="优盟标书工具（HTTP 客户端）")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="bid_tools", description="优盟标书工具（技能本地版）")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    # ---------- 资质与初稿 ----------
     sub.add_parser("list", help="列出企业资质清单")
 
     p_match = sub.add_parser("match", help="资质逐条比对")
@@ -133,6 +68,7 @@ def main() -> int:
     p_draft.add_argument("--final", action="store_true")
     p_draft.add_argument("--template", default="", help="导出模板名（预设 standard/a4-visual/a3-landscape 或自定义）")
 
+    # ---------- 废标项检查 ----------
     p_ri = sub.add_parser("reject-init", help="创建废标项检查会话")
     p_ri.add_argument("--items", required=True, help="无效投标/废标项清单数组 JSON 或 @file")
     p_ri.add_argument("--project", default="", help="项目名称")
@@ -152,6 +88,7 @@ def main() -> int:
     p_rs = sub.add_parser("reject-state", help="查看会话当前状态")
     p_rs.add_argument("--session", required=True)
 
+    # ---------- 全局事实与一致性 ----------
     p_fi = sub.add_parser("facts-init", help="建立全局事实清单")
     p_fi.add_argument("--facts", required=True, help="事实数组 JSON 或 @file")
     p_fi.add_argument("--project", default="", help="项目名称")
@@ -175,6 +112,7 @@ def main() -> int:
     p_cr.add_argument("--ledger", required=True, help="cons-build 返回的 ledger_id")
     p_cr.add_argument("--rules", required=True, help="统一口径数组 JSON 或 @file")
 
+    # ---------- 项目工作流 ----------
     p_pi = sub.add_parser("project-init", help="创建标书项目（把全链路产物收拢到一个 project_id）")
     p_pi.add_argument("--project", default="", help="项目名称")
     p_pi.add_argument("--bid-no", default="")
@@ -192,12 +130,14 @@ def main() -> int:
     p_pa.add_argument("--artifacts", default="", help="产物对象 JSON 或 @file，如 '{\"facts_id\":\"facts-..\"}'")
     p_pa.add_argument("--force", action="store_true", help="关卡不过也强行推进（会在项目里留痕）")
 
+    # ---------- 配图 ----------
     sub.add_parser("fig-types", help="列出可渲染的配图类型与渲染方式（画图前先看）")
     sub.add_parser("fig-status", help="配图渲染环境自检")
 
-    p_fr = sub.add_parser("fig-render", help="把 Mermaid/HTML 渲染成 PNG")
-    p_fr.add_argument("--figures", required=True, help="图数组 JSON 或 @file")
+    p_fig = sub.add_parser("fig-render", help="把 Mermaid/HTML 渲染成 PNG")
+    p_fig.add_argument("--figures", required=True, help="图数组 JSON 或 @file")
 
+    # ---------- 导出模板 ----------
     sub.add_parser("template-presets", help="列出导出模板预设")
     sub.add_parser("template-list", help="列出已保存的自定义模板")
 
@@ -211,10 +151,12 @@ def main() -> int:
     p_td = sub.add_parser("template-delete", help="删除自定义模板")
     p_td.add_argument("--name", required=True)
 
+    # ---------- 受限 HTML ----------
     sub.add_parser("html-spec", help="受限 HTML 的白名单与示例（写 sections[].html 前先看）")
     p_hv = sub.add_parser("html-validate", help="校验一段受限 HTML")
     p_hv.add_argument("--html", required=True, help="HTML 字符串或 @文件")
 
+    # ---------- 版面与配额 ----------
     p_lm = sub.add_parser("layout-metrics", help="算出一套模板下每页能装多少字")
     p_lm.add_argument("--template", default="", help="导出模板名（默认 standard）")
 
@@ -226,17 +168,19 @@ def main() -> int:
     p_lp.add_argument("--min-words", type=int, default=0, help="单节目标下限")
     p_lp.add_argument("--max-words", type=int, default=0, help="单节目标上限")
 
-    p_da = sub.add_parser("dup-analyze", help="标书查重（确定性引擎：白名单剔除 + 分层比对）")
-    p_da.add_argument("--documents", required=True, help="待比对文件数组 JSON 或 @file")
-    p_da.add_argument("--tender", default="", help="招标原文（字符串或 @文件）；强烈建议提供，否则会大面积误报")
-    p_da.add_argument("--tender-path", default="", help="或给服务器上的招标文件路径，由服务端解析")
+    # ---------- 查重 ----------
+    p_dup = sub.add_parser("dup-analyze", help="标书查重（确定性引擎：白名单剔除 + 分层比对）")
+    p_dup.add_argument("--documents", required=True, help="待比对文件数组 JSON 或 @file")
+    p_dup.add_argument("--tender", default="", help="招标原文（字符串或 @文件）；强烈建议提供，否则会大面积误报")
+    p_dup.add_argument("--tender-path", default="", help="或给招标文件路径（本机可读即可）")
 
+    # ---------- 正文检查 ----------
     p_tc = sub.add_parser("typo-check", help="回验错别字候选（定位不到的直接排除）")
     p_tc.add_argument("--candidates", required=True, help="候选数组 JSON 或 @file")
     p_tc.add_argument("--source", default="", help="待检查正文（字符串或 @文件）")
-    p_tc.add_argument("--source-path", default="", help="或服务器上的正文文件路径")
+    p_tc.add_argument("--source-path", default="", help="或给本机正文文件路径")
     p_tc.add_argument("--tender", default="", help="招标原文（字符串或 @文件）；强烈建议提供")
-    p_tc.add_argument("--tender-path", default="", help="或服务器上的招标文件路径")
+    p_tc.add_argument("--tender-path", default="", help="或给本机招标文件路径")
 
     p_lc = sub.add_parser("logic-check", help="逻辑谬误检查（跨段前后矛盾）")
     p_lc.add_argument("--segments", required=True, help="小节数组 JSON 或 @file")
@@ -248,135 +192,144 @@ def main() -> int:
     p_ce.add_argument("--logic-id", default="", help="logic-check 返回的 review_id（可选）")
     p_ce.add_argument("--project", default="", help="项目名称（仅正文检查时用于命名）")
 
-    args = parser.parse_args()
+    return parser
 
-    if args.command == "list":
-        result = _request("GET", "/api/qualifications")
-    elif args.command == "match":
-        result = _request("POST", "/api/qualify-match",
-                          {"requirements": _load_json_arg(args.requirements)})
-    elif args.command == "draft":
-        result = _request("POST", "/api/generate-draft", {
-            "project_name": args.project,
-            "sections": _load_json_arg(args.sections),
-            "qualification_ids": [q.strip() for q in args.qualifications.split(",") if q.strip()],
-            "bid_no": args.bid_no,
-            "final": args.final,
-            "template": args.template or None,
-        })
-    elif args.command == "reject-init":
-        result = _request("POST", "/api/rejection/init", {
-            "project": {"name": args.project, "bid_no": args.bid_no},
-            "rejection_items": _load_json_arg(args.items),
-            "documents": _load_json_arg(args.documents) if args.documents else [],
-        })
-    elif args.command == "reject-apply":
-        result = _request("POST", "/api/rejection/apply", {
-            "session_id": args.session,
-            "patch": _load_json_arg(args.patch),
-        })
-    elif args.command == "reject-finalize":
-        result = _request("POST", "/api/rejection/finalize", {"session_id": args.session})
-    elif args.command == "reject-export":
-        result = _request("POST", "/api/rejection/export", {"session_id": args.session})
-    elif args.command == "reject-state":
-        result = _request("GET", f"/api/rejection/state?session_id={args.session}")
-    elif args.command == "facts-init":
-        result = _request("POST", "/api/facts/init", {
-            "project": {"name": args.project, "bid_no": args.bid_no},
-            "facts": _load_json_arg(args.facts),
-            "use_manifest": not args.no_manifest,
-        })
-    elif args.command == "facts-update":
-        result = _request("POST", "/api/facts/update", {
-            "facts_id": args.facts_id,
-            "facts": _load_json_arg(args.facts),
-            "use_manifest": not args.no_manifest,
-        })
-    elif args.command == "facts-render":
-        result = _request("POST", "/api/facts/render", {"facts_id": args.facts_id})
-    elif args.command == "cons-build":
-        result = _request("POST", "/api/consistency/build", {
-            "facts_id": args.facts_id,
-            "sections": _load_json_arg(args.sections),
-            "extractions": _load_json_arg(args.extractions),
-        })
-    elif args.command == "cons-repair":
-        result = _request("POST", "/api/consistency/repair", {
-            "ledger_id": args.ledger,
-            "rules": _load_json_arg(args.rules),
-        })
-    elif args.command == "project-init":
-        result = _request("POST", "/api/project/init", {
-            "project": {"name": args.project, "bid_no": args.bid_no}})
-    elif args.command == "project-state":
-        result = _request("GET", f"/api/project/state?project_id={args.project_id}")
-    elif args.command == "project-next":
-        result = _request("GET", f"/api/project/next?project_id={args.project_id}")
-    elif args.command == "fig-types":
-        result = _request("GET", "/api/figure/types")
-    elif args.command == "fig-status":
-        result = _request("GET", "/api/figure/status")
-    elif args.command == "fig-render":
-        result = _request("POST", "/api/figure/render", {"figures": _load_json_arg(args.figures)})
-    elif args.command == "template-presets":
-        result = _request("GET", "/api/template/presets")
-    elif args.command == "template-list":
-        result = _request("GET", "/api/template/list")
-    elif args.command == "template-get":
-        result = _request("POST", "/api/template/get", {"template": args.template or None})
-    elif args.command == "template-save":
-        result = _request("POST", "/api/template/save", {
-            "name": args.name, "template": _load_json_arg(args.template)})
-    elif args.command == "template-delete":
-        result = _request("POST", "/api/template/delete", {"name": args.name})
-    elif args.command == "html-spec":
-        result = _request("GET", "/api/html/spec")
-    elif args.command == "html-validate":
-        result = _request("POST", "/api/html/validate", {"html": _load_text_arg(args.html)})
-    elif args.command == "layout-metrics":
-        result = _request("GET", f"/api/layout/metrics?template={args.template}")
-    elif args.command == "layout-plan":
+
+def dispatch(args) -> dict:
+    """把命令行参数映射到 `bidagent.bid_api`（子命令与参数名与 thin client 版一致）。"""
+    command = args.command
+
+    if command == "list":
+        return bid_api.list_qualifications_impl()
+    if command == "match":
+        return bid_api.qualify_match_impl(_load_json_arg(args.requirements))
+    if command == "draft":
+        return bid_api.generate_draft_impl(
+            args.project, _load_json_arg(args.sections),
+            [q.strip() for q in args.qualifications.split(",") if q.strip()],
+            args.bid_no, args.final, args.template or None)
+
+    if command == "reject-init":
+        return bid_api.rejection_init_impl(
+            {"name": args.project, "bid_no": args.bid_no},
+            _load_json_arg(args.items),
+            _load_json_arg(args.documents) if args.documents else [])
+    if command == "reject-apply":
+        return bid_api.rejection_apply_impl(args.session, _load_json_arg(args.patch))
+    if command == "reject-finalize":
+        return bid_api.rejection_finalize_impl(args.session)
+    if command == "reject-export":
+        return bid_api.rejection_export_impl(args.session)
+    if command == "reject-state":
+        return bid_api.rejection_state_impl(args.session)
+
+    if command == "facts-init":
+        return bid_api.facts_init_impl({"name": args.project, "bid_no": args.bid_no},
+                                       _load_json_arg(args.facts), not args.no_manifest)
+    if command == "facts-update":
+        return bid_api.facts_update_impl(args.facts_id, _load_json_arg(args.facts), not args.no_manifest)
+    if command == "facts-render":
+        return bid_api.facts_render_impl(args.facts_id)
+    if command == "cons-build":
+        return bid_api.consistency_build_impl(
+            {"sections": _load_json_arg(args.sections), "extractions": _load_json_arg(args.extractions),
+             "facts_id": args.facts_id or None})
+    if command == "cons-repair":
+        return bid_api.consistency_repair_impl(args.ledger, _load_json_arg(args.rules))
+
+    if command == "project-init":
+        return bid_api.project_init_impl({"name": args.project, "bid_no": args.bid_no})
+    if command == "project-state":
+        return bid_api.project_state_impl(args.project_id)
+    if command == "project-next":
+        return bid_api.project_next_impl(args.project_id)
+    if command == "project-advance":
+        return bid_api.project_advance_impl(
+            args.project_id, args.stage,
+            _load_json_arg(args.artifacts) if args.artifacts else {}, args.force)
+
+    if command == "fig-types":
+        return bid_api.figure_types_impl()
+    if command == "fig-status":
+        return bid_api.figure_status_impl()
+    if command == "fig-render":
+        return bid_api.figure_render_impl(_load_json_arg(args.figures))
+
+    if command == "template-presets":
+        return bid_api.template_presets_impl()
+    if command == "template-list":
+        return bid_api.template_list_impl()
+    if command == "template-get":
+        return bid_api.template_get_impl(args.template or None)
+    if command == "template-save":
+        return bid_api.template_save_impl(args.name, _load_json_arg(args.template))
+    if command == "template-delete":
+        return bid_api.template_delete_impl(args.name)
+
+    if command == "html-spec":
+        return bid_api.html_spec_impl()
+    if command == "html-validate":
+        return bid_api.html_validate_impl(_load_text_arg(args.html))
+
+    if command == "layout-metrics":
+        return bid_api.layout_metrics_impl(args.template or None)
+    if command == "layout-plan":
         payload = {"sections": _load_json_arg(args.sections), "template": args.template or None}
         for key, value in (("total_words", args.total_words), ("section_words", args.section_words),
                            ("min_words", args.min_words), ("max_words", args.max_words)):
             if value:
                 payload[key] = value
-        result = _request("POST", "/api/layout/plan", payload)
-    elif args.command == "dup-analyze":
-        result = _request("POST", "/api/duplicate/analyze", {
+        return bid_api.layout_plan_impl(payload)
+
+    if command == "dup-analyze":
+        return bid_api.duplicate_analyze_impl({
             "documents": _load_json_arg(args.documents),
             "tender_text": _load_text_arg(args.tender) if args.tender else None,
-            "tender_path": args.tender_path or None,
-        })
-    elif args.command == "typo-check":
-        result = _request("POST", "/api/review/typo", {
+            "tender_path": args.tender_path or None})
+
+    if command == "typo-check":
+        return bid_api.typo_check_impl({
             "candidates": _load_json_arg(args.candidates),
             "source_text": _load_text_arg(args.source) if args.source else None,
             "source_path": args.source_path or None,
             "tender_text": _load_text_arg(args.tender) if args.tender else None,
-            "tender_path": args.tender_path or None,
-        })
-    elif args.command == "logic-check":
-        result = _request("POST", "/api/review/logic", {
-            "segments": _load_json_arg(args.segments),
-            "extractions": _load_json_arg(args.extractions),
-        })
-    elif args.command == "check-export":
-        result = _request("POST", "/api/review/export", {
+            "tender_path": args.tender_path or None})
+    if command == "logic-check":
+        return bid_api.logic_check_impl({"segments": _load_json_arg(args.segments),
+                                         "extractions": _load_json_arg(args.extractions)})
+    if command == "check-export":
+        return bid_api.check_export_impl({
             "rejection_session_id": args.rejection_session or None,
-            "typo_id": args.typo_id or None,
-            "logic_id": args.logic_id or None,
-            "project_name": args.project,
-        })
-    else:
-        result = _request("POST", "/api/project/advance", {
-            "project_id": args.project_id,
-            "stage": args.stage,
-            "artifacts": _load_json_arg(args.artifacts) if args.artifacts else {},
-            "force": args.force,
-        })
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+            "typo_id": args.typo_id or None, "logic_id": args.logic_id or None,
+            "project_name": args.project})
+
+    raise ValueError(f"未知子命令：{command}")
+
+
+def _print_json(payload: dict) -> None:
+    """打印 JSON。终端装不下中文字符时（如 Windows GBK 控制台）退回 ASCII 转义，内容不失真。"""
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(json.dumps(payload, ensure_ascii=True, indent=2))
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        result = dispatch(args)
+    except ValueError as exc:
+        # 一律打到 stdout，便于调用方统一解析；同时以非零码结束
+        _print_json({"success": False, "error": str(exc)})
+        return 1
+    except Exception as exc:  # noqa: BLE001 - 兜底，避免把栈直接甩给模型
+        _print_json({"success": False, "error": f"{type(exc).__name__}: {exc}"[:400]})
+        return 1
+
+    if args.command in ARTIFACT_COMMANDS:
+        result.setdefault("output_dir", settings.BID_OUTPUT_DIR)
+    _print_json(result)
     return 0
 
 

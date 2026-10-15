@@ -1,0 +1,18 @@
+{
+  "backend_commit": "c0222ed",
+  "files": {
+    "bid_api.py": "352296a54351abf4d946f415bfd3191ff59b1eeaaacc61b66bc70c0f372fdb4d",
+    "bid_service.py": "3c2d80cb8f846242db76a168c106fc128571ac6fd4311dbb2442f7cd214f224a",
+    "bidding_documents.py": "e63f29835f6d4e1d5414e33d2e9d6f5102326d11cc903962aa88c8a0adb76df9",
+    "bid_consistency.py": "8ebab74a714540215dd4bf0f305bfaee36996e03ca3defe239c48738cc0d8b93",
+    "bid_duplicate.py": "78f068f97b368dcefc021eaceded835ebff700015aa2aa0af8f6661ffb78cb04",
+    "bid_facts.py": "1700d3683c4c2831fba7dd3578968b07543fafff6d2fd201c0a854b42c004943",
+    "bid_figures.py": "02b1eadd8ef71c924d1ab0a4022c2967d581240814014ff642ca72e2a98c4310",
+    "bid_html.py": "b8ee696e66d91c920b3bc47285b4b10bc6b53fd35b13df48fffbc9497e4cb161",
+    "bid_layout.py": "3fc0ae7f96d2e50e5a13606d766aa437925077f8ffb5518f8ba44dee4d9c42b1",
+    "bid_project.py": "1a9d2dbeeff88f42ba5fe24f48067a5093bd5ebc501334b3bf4e4b282493f658",
+    "bid_rejection.py": "50c115faff30d45a98b2c385bffcc607a4183a400dcacdf76ed730fac01da7fd",
+    "bid_review.py": "d09350a530eb960caf1fc8540d3671d7514e54fc9c6b24debe3dc0dacd059b48",
+    "bid_template.py": "8560982b6658844e64ad4c94cac47b40d63e2a088b6e73dee88c56e90aff08fe"
+  }
+}

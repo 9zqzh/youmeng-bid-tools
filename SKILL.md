@@ -5,7 +5,24 @@ description: 优盟投标工具：查询企业资质清单、把招标要求与�
 
 # 优盟标书工具
 
-一个 **HTTP 瘦客户端**技能（仅用 Python 标准库），通过调用「优盟标书工具服务」（bid-mcp）完成：**列出资质 / 资质比对 / 废标项检查 / 全局事实 / 一致性审计 / 生成两册 Word**。
+一个 **自包含**技能：实现（`scripts/bidagent/`）随技能一起分发，**不需要任何外部服务**，在技能沙箱里就地跑完
+**列出资质 / 资质比对 / 废标项检查 / 全局事实 / 一致性审计 / 配图渲染 / 版面配额 / 查重 / 正文检查 / 生成两册 Word**。
+
+技能目录一览：
+
+```
+youmeng-bid-tools/
+├── SKILL.md            本文件（给模型看的用法）
+├── README.md           给人看的说明与设计取舍
+├── requirements.txt    Python 依赖（装到技能自己的 .venv）
+├── scripts/
+│   ├── bid_tools.py    命令行入口（33 个子命令，输出 JSON）
+│   ├── assets/mermaid.min.js   离线渲染 Mermaid 用（已随技能带）
+│   └── bidagent/       实现本体（从后端仓库 services/ 同步而来，勿手改）
+└── tools/
+    ├── sync_from_backend.py  把后端 services/ 同步进来（唯一权威源在后端）
+    └── smoke_test.py         装好后自检：依赖 + 各子命令
+```
 
 ## 推荐用法：项目工作流（先看这一节）
 
@@ -27,7 +44,7 @@ python scripts/bid_tools.py project-state --project-id <prj-id>      # 看阶段
 | `facts` | `facts_id` | 事实清单非空、无未落实的占位符 |
 | `content` | — | 前置阶段达标 |
 | `consistency` | `ledger_id` | 台账已 `cons-repair` 给出统一口径、无未解决冲突 |
-| `draft` | `files` | Word 文件确实存在于服务端 |
+| `draft` | `files` | Word 文件确实已落盘到产物目录 |
 | `rejection` | `rejection_session_id` | 废标项检查已跑完（`finished`）|
 
 确需跳过本阶段的拦阻项，可加 `--force`：会在项目里**留痕**（`history` 记录 `action: force` 与被跳过的原因），且阶段状态显示为 `accepted` 而不是 `done`；一旦该阶段产物内容再变化，豁免**自动失效**。
@@ -35,15 +52,37 @@ python scripts/bid_tools.py project-state --project-id <prj-id>      # 看阶段
 
 **每个子命令也都能单独用**（下面的 1)–6) 节），项目工作流只是把它们串起来并加关卡，不影响单独调用。
 
-## 前置
+## 前置（装一次）
 
-- **服务地址**：环境变量 `BID_API_BASE`，默认 `http://bid-mcp:18999`；跨机访问改为 `http://<服务器IP>:18999`。
-- 仅需 **Python 3**（用标准库 `urllib`），**无需 pip 安装任何依赖**。
-- 无需本机代码或资质文件（清单与原件由服务端持有）。
+**不需要任何服务**，但要先把依赖装进技能自己的虚拟环境（沙箱里推荐 `uv`；本地有 python 也行）：
+
+```bash
+uv venv --seed .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+```
+
+- 依赖：`python-docx / openpyxl / lxml / Pillow / pypdf / pypdfium2 / httpx`；
+- **配图渲染**额外需要 `playwright`（已含在 requirements）与一个 Chromium/Chrome/Edge 浏览器；
+  沙箱里若没有，用 `playwright install chromium` 装（还要中文字体，否则中文会变方块）。
+- 装完跑一次自检：`python tools/smoke_test.py`（会逐项告诉你哪一项没装好）。
+- 之后所有子命令都用 `.venv/bin/python scripts/bid_tools.py ...` 调用。
+
+三个目录（有默认值，一般不用改；用同名环境变量覆盖）：
+
+| 环境变量 | 用途 | 默认 |
+| --- | --- | --- |
+| `BID_INPUT_DIR` | **输入**：`manifest.json` 与资质原件放这里（每次会话上传） | `/workspace/input` |
+| `BID_OUTPUT_DIR` | **产物**：Word / xlsx / png 落这里（`/workspace/output` 会自动可下载） | `/workspace/output` |
+| `BID_STATE_DIR` | **状态**：检查会话 / 事实 / 台账 / 项目 / 模板（跨会话保留） | `<技能目录>/.state` |
+| `BID_MANIFEST_PATH` | 资质清单路径（留空则在输入目录里找 `manifest.json`） | 空 |
+
+> 资质**清单与原件由你提供**：把 `manifest.json`（含企业主体信息与资质条目）和资质原件一起放进输入目录即可。
+> 原件体积大，不随技能分发。
 
 ## 用法
 
-脚本：`scripts/bid_tools.py`（输出 JSON）。
+脚本：`scripts/bid_tools.py`（输出 JSON）。下面示例一律写 `python scripts/bid_tools.py`，
+沙箱里请换成 `.venv/bin/python scripts/bid_tools.py`（或先 `source .venv/bin/activate`）。
 
 ### 1) 列出企业资质
 
@@ -51,7 +90,8 @@ python scripts/bid_tools.py project-state --project-id <prj-id>      # 看阶段
 python scripts/bid_tools.py list
 ```
 
-返回 `{company, items:[{id,name,category,valid_to,keywords}]}`。
+返回 `{company, items:[{id,name,category,valid_to,keywords}]}`；
+读不到清单时会明确报错 —— 那说明 `manifest.json` 还没放进输入目录。
 
 ### 2) 招标要求 × 资质 逐条比对
 
@@ -72,11 +112,12 @@ python scripts/bid_tools.py draft \
   --qualifications q015,q006
 ```
 
-返回 `{company, files:[{name,url}], warnings}`；`files[].url` 即下载链接（`kind` 由服务端按分册生成）。
+返回 `{company, files:[{name,path}], warnings, output_dir}`；`files[].path` 是落盘绝对路径，
+直接告诉用户去产物目录取（沙箱里 `/workspace/output` 下的文件可在回复中下载）。
 
-### 4) 废标项 / 无效标检查（4 步，服务端维护权威状态）
+### 4) 废标项 / 无效标检查（4 步，程序维护权威状态）
 
-**先由你（模型）从招标文件抽取「无效投标 / 废标项」清单**，再交给服务端建档：
+**先由你（模型）从招标文件抽取「无效投标 / 废标项」清单**，再交给程序建档：
 
 ```bash
 python scripts/bid_tools.py reject-init \
@@ -86,7 +127,7 @@ python scripts/bid_tools.py reject-init \
 ```
 
 返回 `{session_id, checklist:[{id,type,title,scope,applicable}], documents, stats}`。
-注意：纸质/线下事项（密封、纸质、现场递交、签章等）由服务端自动标为 `applicable=false`，不纳入电子检查。
+注意：纸质/线下事项（密封、纸质、现场递交、签章等）会被程序自动标为 `applicable=false`，不纳入电子检查。
 
 **然后按「文档 × 片段」顺序逐段提交增量**（每次只交本片段的增量，**不要重发整份状态**）：
 
@@ -111,13 +152,13 @@ python scripts/bid_tools.py reject-apply --session rej-20261015-ab12cd34 --patch
 
 ```bash
 python scripts/bid_tools.py reject-finalize --session <id>   # 收尾：去重排序，输出 findings/pending/summary
-python scripts/bid_tools.py reject-export   --session <id>   # 导出 xlsx（检查概览/废标项/待定风险），返回下载链接
+python scripts/bid_tools.py reject-export   --session <id>   # 导出 xlsx（检查概览/废标项/待定风险）到产物目录
 python scripts/bid_tools.py reject-state    --session <id>   # 查看当前完整状态（排查用）
 ```
 
-## 三条硬规则（服务端强制执行，别试图绕过）
+## 三条硬规则（程序强制执行，别试图绕过）
 
-1. **「缺失 / 未响应」类结论不能直接确认**。服务端会把它降级为「待定」，因为文件后续片段可能包含对应内容。补到可引用的投标原文后，用 `pending_risk_updates` 升级。
+1. **「缺失 / 未响应」类结论不能直接确认**。程序会把它降级为「待定」，因为文件后续片段可能包含对应内容。补到可引用的投标原文后，用 `pending_risk_updates` 升级。
 2. **没有投标证据（`bid_evidence`）的条目不能确认**，只会被降级或拒绝。
 3. **结构性线索保护**：若证据里出现「目录 / 章节标题 / 附件 / 清单 / 页码」等线索，不得据此判定缺失——同样降级为待定。
 
@@ -134,7 +175,7 @@ python scripts/bid_tools.py facts-init \
 ```
 
 返回 `{facts_id, facts, issues, rendered, ok}`：
-- 服务端会**自动注入资质清单的企业主体信息**（名称 / 统一社会信用代码 / 法定代表人）作为**锁定事实**，你不得改写；提交冲突值会返回 `locked_conflict`。
+- 程序会**自动注入资质清单的企业主体信息**（名称 / 统一社会信用代码 / 法定代表人）作为**锁定事实**，你不得改写；提交冲突值会返回 `locked_conflict`。
 - `issues` 里的 `placeholder`（含「待补充」等未落定值）与 `duplicate_conflict` **必须先处理**。
 - `ok=false` 时不要把 `rendered` 拿去写正文。
 
@@ -149,7 +190,7 @@ python scripts/bid_tools.py facts-render --facts-id <id>     # 取逐字节一�
 
 ### 6) 一致性审计（**写正文之后**做）
 
-你**并发核对每个小节**，只上报两类问题与本节的**类型化事实取值**；服务端负责比对：
+你**并发核对每个小节**，只上报两类问题与本节的**类型化事实取值**；程序负责比对：
 
 ```bash
 python scripts/bid_tools.py cons-build --facts-id <id> --sections @sections.json --extractions @extractions.json
@@ -157,13 +198,13 @@ python scripts/bid_tools.py cons-build --facts-id <id> --sections @sections.json
 
 `extractions` 每项：`{section_id, facts:[{category,name,value,quote}], issues:[{type:"与全局事实冲突"|"小节内部矛盾", detail, quote}]}`。
 
-返回 `{ledger_id, fact_table, conflicts, issues, summary}`。服务端会自动找出：
+返回 `{ledger_id, fact_table, conflicts, issues, summary}`。程序会自动找出：
 - **跨节同名不同取值**（如两节分别写「质保期一年 / 两年」）；
 - **与全局事实不一致的取值**（锁定事实的违反会被标 `locked=true` 并优先列出）。
 
 > **不要**上报用词、称谓、文风、篇幅、承诺语气强弱的差异——这些不进入比较，报了也只会被忽略。
 
-再由你给出**统一口径**，服务端派发逐节修复任务：
+再由你给出**统一口径**，程序派发逐节修复任务：
 
 ```bash
 python scripts/bid_tools.py cons-repair --ledger <id> --rules '[{"target":"质保期","value":"一年"}]'
@@ -175,7 +216,7 @@ python scripts/bid_tools.py cons-repair --ledger <id> --rules '[{"target":"质�
 
 ### 7) 配图渲染（Mermaid / HTML → PNG）
 
-流程图、思维导图、甘特图、架构图、柱状图这类图，交给服务端**确定性渲染**成 PNG。
+流程图、思维导图、甘特图、架构图、柱状图这类图，**就地确定性渲染**成 PNG。
 （本期没有生图模型，实物照片 / 场景效果图 / 剖视图这类画不了，见 `fig-types`。）
 
 ```bash
@@ -195,7 +236,7 @@ python scripts/bid_tools.py fig-render --figures @figs.json
 ]
 ```
 
-返回 `{rendered:[{id,name,url,width,height}], failed:[{id,error}], summary}`。
+返回 `{rendered:[{id,name,path,width,height,bytes}], failed:[{id,error}], summary, output_dir}`。
 
 **四条规则：**
 
@@ -204,7 +245,7 @@ python scripts/bid_tools.py fig-render --figures @figs.json
 3. **渲染时网络已切断**：不能引用外部图片/字体/CSS（引了也不会加载），所以内容必须自包含。
 4. **逐张容错**：某张失败不影响其它，`failed` 里带原因，改好后可只重交失败的那几张。
 
-> 每张图的 `url` 可直接放进 Word 或给前端预览；图片落在服务端 `figures/` 子目录。
+> 每张图的 `path` 可直接放进 Word（章节 `images` 里用图名引用）；图片落在**产物目录**的 `figures/` 子目录。
 
 ### 8) 导出模板（Word 排版）
 
@@ -371,7 +412,7 @@ python scripts/bid_tools.py check-export \
 2. **`facts-init` 固化全局事实**（处理掉 issues）→ advance 到 `facts`（带 `facts_id`）；
 3. **`facts-render` 逐节注入** → 撰写各节正文（推荐用 `sections[].html` 写有结构的正文，先 `html-spec` 看白名单、`html-validate` 自查）；出稿前用 `layout-plan` 做**字数配额与版面自查**（字数偏离、末页空洞）；需要配图时用 `fig-render` 出图并在 html 里用 `<figure><img src="图名"/><figcaption>图题</figcaption></figure>` 引用 → advance 到 `content`；
 4. **`cons-build` 建账 → `cons-repair` 给统一口径 → 按 `tasks` 修正各节** → advance 到 `consistency`（带 `ledger_id`）；
-5. `draft` 生成 Word（需要特定排版就带 `--template <模板名>`，章节里可带 `images` 嵌入第 3 步渲染好的配图），把 `files[].url` 交给用户 → advance 到 `draft`（带 `files`）；
+5. `draft` 生成 Word（需要特定排版就带 `--template <模板名>`，章节里可带 `images` 嵌入第 3 步渲染好的配图），把 `files[].path` 交给用户 → advance 到 `draft`（带 `files`）；
 6. 从招标文件抽取废标项 → `reject-init` → 逐片段 `reject-apply` → `reject-finalize`；
    另做**错别字**（`typo-check`，务必带招标原文）与**逻辑谬误**（`logic-check`）→
    用 `check-export` 把三类结果导出到**同一份 xlsx**，把风险清单（尤其**已确认**项）与链接交给用户 → advance 到 `rejection`（带 `rejection_session_id`）。
@@ -382,6 +423,12 @@ python scripts/bid_tools.py check-export \
 
 - **只对资质类要求比对**：流程 / 承诺 / 报价类要求会被标为「不适用」，不计入缺口。
 - `draft` 必须提供 `--sections`；`--final` 且存在待补项时会拒绝导出。
-- 报「无法连接 …」：检查 `BID_API_BASE` 是否指向可达的 bid-mcp 服务（沙箱网络需能访问该地址）。
+- 报「找不到资质清单」：把 `manifest.json` 放进 `BID_INPUT_DIR`（默认 `/workspace/input`），
+  或用 `BID_MANIFEST_PATH` 指到具体文件。
+- 报「缺 xxx 模块 / 命令找不到」：依赖没装好 —— 先跑 `python tools/smoke_test.py` 定位。
+- 配图渲染失败：多半是没装 chromium 或没中文字体，跑 `fig-status` 看提示；
+  `kind=mermaid` 的图另需 `scripts/assets/mermaid.min.js`（已随技能带）。
+- **状态会持久化**在 `BID_STATE_DIR`（默认技能目录 `.state/`）；同一 `project_id` / `session_id`
+  要能跨命令续跑。清理状态即等于重来。
 - Word 的目录与页码需在 Word 中「更新域」；缺失的原件需人工补齐。
 - 废标项检查的**待定项不是结论**，须人工核对原文；报告中的「已确认风险」才是有证据支撑的结论。

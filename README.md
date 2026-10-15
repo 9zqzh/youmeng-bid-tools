@@ -1,7 +1,8 @@
 # 优盟标书工具 · youmeng-bid-tools
 
-一个 **HTTP 瘦客户端技能**：查询企业资质清单、把招标要求与企业资质逐条比对、对投标文件做废标项/无效标检查、生成投标文件两册 Word 初稿。
-**不依赖任何本机代码或资质文件**——只用 Python 标准库，通过 HTTP 调用「优盟标书工具服务」（bid-mcp）。
+一个 **自包含技能**：查询企业资质清单、把招标要求与企业资质逐条比对、对投标文件做废标项/无效标检查、检查错别字与前后矛盾、给标书配图、控制排版与篇幅、多份标书查重、生成投标文件两册 Word 初稿。
+**不依赖任何外部服务**——实现随技能一起分发（`scripts/bidagent/`），在技能沙箱里就地跑。
+**唯一的权威源在后端仓库 `services/`**，技能里的副本由 `tools/sync_from_backend.py` 同步生成，两边不会漂移。
 
 ## 功能
 
@@ -9,7 +10,7 @@
 | --- | --- |
 | `list`  | 列出企业资质清单（id / 名称 / 类别 / 有效期 / 关键词）|
 | `match` | 招标要求 × 资质 **逐条比对**：满足 / 待补充 / 不满足 / 不适用 |
-| `draft` | 生成 **商务技术册 + 报价册** Word 初稿（服务端嵌入资质原件）|
+| `draft` | 生成 **商务技术册 + 报价册** Word 初稿（嵌入资质原件）|
 | `reject-init` | 创建**废标项检查会话**（传入从招标文件抽取的无效投标 / 废标项清单）|
 | `reject-apply` | 提交**一个片段的检查增量**（证据 / 新增待定风险 / 更新 / 解除 / 确认）|
 | `reject-finalize` | 收尾：合并去重、按严重度排序，输出报告 |
@@ -26,7 +27,7 @@
 | `project-advance` | 声明某阶段完成并推进，**带关卡校验**（不达标拒绝；`--force` 可跳过并留痕）|
 | `fig-types` | 列出可渲染的配图类型与渲染方式（画图前先看）|
 | `fig-status` | 配图渲染环境自检（playwright / 浏览器 / mermaid.min.js）|
-| `fig-render` | 把 **Mermaid / 静态 HTML** 渲染成 PNG，返回下载链接 |
+| `fig-render` | 把 **Mermaid / 静态 HTML** 渲染成 PNG，落到产物目录 |
 | `template-presets` | 列出导出模板预设及其排版差异 |
 | `template-list` | 列出已保存的自定义模板 |
 | `template-get` | 把预设/模板名解析成完整配置（便于微调）|
@@ -45,16 +46,45 @@
 
 ```
 youmeng-bid-tools/
-├── SKILL.md               # Skill 定义（名称、触发词、用法、硬规则）
-└── scripts/
-    └── bid_tools.py       # 全部子命令（纯标准库）
+├── SKILL.md                     # Skill 定义（名称、触发词、用法、硬规则）
+├── requirements.txt             # Python 依赖（装到技能自己的 .venv）
+├── scripts/
+│   ├── bid_tools.py             # 全部 33 个子命令（命令行入口，输出 JSON）
+│   ├── assets/
+│   │   └── mermaid.min.js       # 离线渲染 Mermaid 用（已随技能带）
+│   └── bidagent/                # 实现本体：从后端 services/ 同步而来（勿手改）
+│       ├── settings.py          #   ← 技能侧手写的配置垫片（不参与同步）
+│       ├── bid_api.py           #   业务入口层（CLI 直接调用它）
+│       ├── bid_service.py …     #   各功能模块
+│       └── .synced.json         #   后端 commit + 各文件 sha256（供 --check 溯源）
+└── tools/
+    ├── sync_from_backend.py     # 把后端 services/ 同步进 scripts/bidagent/
+    └── smoke_test.py            # 装好后自检：依赖 + 各子命令
 ```
 
-## 前置
+## 前置（装一次）
 
-- **Python 3**（仅标准库 `urllib`，**无需 pip 安装任何依赖**）。
-- **服务地址**：环境变量 `BID_API_BASE`，默认 `http://bid-mcp:18999`；跨机访问改为 `http://<服务器IP>:18999`。
-- 无需本机代码 / 资质文件（资质清单与原件由服务端持有）。
+**不需要任何服务**，但要先把依赖装进技能自己的虚拟环境：
+
+```bash
+uv venv --seed .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+python tools/smoke_test.py          # 自检：依赖 + 各子命令能否跑通
+```
+
+- 依赖：`python-docx / openpyxl / lxml / Pillow / pypdf / pypdfium2 / httpx`；
+- **配图渲染**额外需要 `playwright` + Chromium/Chrome/Edge + 中文字体（否则中文变方块），见 `fig-status`。
+- 本地已有 Python 时也可 `python -m venv .venv && .venv/bin/pip install -r requirements.txt`。
+- **不要 `pip install` 进系统 Python**（沙箱里会污染环境，也会在技能升级时丢失）。
+
+三个目录（有默认值，一般不用改；用同名环境变量覆盖）：
+
+| 环境变量 | 用途 | 默认 |
+| --- | --- | --- |
+| `BID_INPUT_DIR` | **输入**：`manifest.json` 与资质原件放这里 | `/workspace/input` |
+| `BID_OUTPUT_DIR` | **产物**：Word / xlsx / png 落这里 | `/workspace/output` |
+| `BID_STATE_DIR` | **状态**：检查会话 / 事实 / 台账 / 项目 / 模板 | `<技能目录>/.state` |
+| `BID_MANIFEST_PATH` | 资质清单路径（留空则在输入目录里找 `manifest.json`） | 空 |
 
 ## 用法
 
@@ -131,11 +161,11 @@ python scripts/bid_tools.py check-export --rejection-session <id> --typo-id <id>
 
 输出均为 JSON：
 - `match` → `{company, results:[{requirement_id,status,matched_qualification_names,reason}], summary:{...}}`
-- `draft` → `{company, files:[{name,url}], warnings}`（`url` 即下载链接）
+- `draft` → `{company, files:[{name,path}], warnings, output_dir}`（`path` 为落盘绝对路径）
 - `reject-init` → `{session_id, checklist, documents, stats}`
 - `reject-apply` → `{round, applied:{...}, rejected:[{kind,reason}], stats, cursor}`
 - `reject-finalize` → `{summary, findings, pending, resolved, checklist, warnings}`
-- `reject-export` → `{name, url}`
+- `reject-export` → `{name, path, output_dir}`
 - `facts-init` / `facts-update` → `{facts_id, facts, issues, rendered, ok}`
 - `facts-render` → `{facts_id, rendered, count}`
 - `cons-build` → `{ledger_id, fact_table, conflicts, issues, summary}`
@@ -144,7 +174,7 @@ python scripts/bid_tools.py check-export --rejection-session <id> --typo-id <id>
 - `project-next` → `{action, stage, label, guide, advance_with}`
 - `fig-types` → `{supported:[{type,label,kind}], unsupported:[...], kinds, hint}`
 - `fig-status` → `{playwright, browser_configured, mermaid_js, ready, notes}`
-- `fig-render` → `{rendered:[{id,name,url,width,height,bytes}], failed:[{id,error}], summary}`
+- `fig-render` → `{rendered:[{id,name,path,width,height,bytes}], failed:[{id,error}], summary, output_dir}`
 - `template-presets` → `{presets:[{name,label,description,paper,orientation,body_size_pt}], fields}`
 - `template-get` / `template-save` → `{name, label, template:{...}}`
 - `template-list` → `{templates:[...], presets:[...]}`
@@ -155,7 +185,7 @@ python scripts/bid_tools.py check-export --rejection-session <id> --typo-id <id>
 - `dup-analyze` → `{signature, summary, content, outline:{pairs}, metadata:{documents,findings}, images, candidates, tender_whitelist, warnings, note}`
 - `typo-check` → `{review_id, findings:[{status,location,line_text,wrong,right,...}], unlocated, invalid, summary, warnings, note}`
 - `logic-check` → `{review_id, findings:[{type,category,name,segments,distinct,detail}], register, summary, warnings, note}`
-- `check-export` → `{name, url, sheets}`
+- `check-export` → `{name, path, sheets, output_dir}`
 
 ## 错别字与逻辑谬误检查
 
@@ -272,14 +302,14 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 | `html` | 甘特图 / 组织架构 / 泳道 / RACI / 风险矩阵 / 系统架构 / 拓扑 / WBS / 鱼骨 / 柱状 / 折线 / 饼 / 雷达 / 面积 / 散点 / 时间轴 |
 | 不支持 | 实物照片 / 场景效果图 / 抠图 / 剖视图 / 爆炸分解图 / 三维渲染（**需生图模型**，本期不做）|
 
-**四条硬规则**（服务端强制）：
+**四条硬规则**（程序强制）：
 
 1. `type` 可省，但给了就自动决定渲染方式（也接受中文标签，如「甘特图」）。
 2. **html 只允许静态 HTML+CSS+SVG**：含 `<script>` / `<iframe>` / 内联事件 / `javascript:` 会被拒绝。
 3. **渲染时网络已切断**：不能引用外部图片、字体、CSS（引了也不会加载），内容必须自包含。
 4. **逐张容错**：单张失败不影响其它，`failed` 里带原因，可只重交失败的。
 
-图片落在服务端 `figures/` 子目录，通过 `/files/figures/<name>.png` 下载；`rendered[].url` 可直接使用。
+图片落在**产物目录**的 `figures/` 子目录（`rendered[].path`）；章节 `images` 里按文件名引用。
 渲染环境自检用 `fig-status`：它会告诉你 playwright 是否可用、浏览器来源、`mermaid.min.js` 是否就位。
 
 ## 项目工作流（把全链路串成一条带关卡的可续跑链路）
@@ -295,7 +325,7 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 | `facts` | `facts_id` | 事实清单非空、无未落实占位符 |
 | `content` | — | 前置阶段达标 |
 | `consistency` | `ledger_id` | 已给统一口径、无未解决冲突 |
-| `draft` | `files` | Word 文件确实存在于服务端 |
+| `draft` | `files` | Word 文件确实已落盘到产物目录 |
 | `rejection` | `rejection_session_id` | 废标项检查已 `finished` |
 
 阶段状态：`done`（达标）/ `accepted`（曾 `--force` 跳过，产物仍未达标，显式标出）/ `blocked`（未达标）/ `pending`。
@@ -303,7 +333,7 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 
 ## 全局事实与一致性审计的设计取舍
 
-**为什么把比对放到服务端**：几十节的标书不可能塞进一次模型调用去「通读比较」。所以让模型**并发逐节抽取类型化事实**（人员与数量 / 日期与期限 / 金额 / 技术参数…），程序把各节事实按 (分类, 名称) 归集成台账，再判冲突。既可靠、可复现，也能覆盖长文档。
+**为什么把比对交给程序**：几十节的标书不可能塞进一次模型调用去「通读比较」。所以让模型**并发逐节抽取类型化事实**（人员与数量 / 日期与期限 / 金额 / 技术参数…），程序把各节事实按 (分类, 名称) 归集成台账，再判冲突。既可靠、可复现，也能覆盖长文档。
 
 **去噪是设计出来的，不是靠提示词**：只比较类型化事实，用词、称谓、文风、篇幅、承诺语气强弱**根本不进入比较**，因此不会产生噪音问题。
 
@@ -315,7 +345,7 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 
 ## 废标项检查的硬规则
 
-服务端（不是本脚本）维护权威状态，并对模型输出做强制约束：
+**程序（不是模型）维护权威状态**，并对模型输出做强制约束：
 
 1. **「缺失 / 未响应」类结论不能直接确认** → 自动降级为「待定」（后续片段可能推翻）。
 2. **没有 `bid_evidence` 的条目不能确认**。
@@ -329,51 +359,51 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 - **项目级**：放到 `<repo>/.qoder/skills/youmeng-bid-tools/`
 - **用户级**：放到 `~/.qoder-cn/skills/youmeng-bid-tools/`
 - **WeKnora**（沙箱技能）：把本仓库打成 zip 上传到「设置 → 技能沙箱」，并在**智能推理**智能体的「能力扩展」里启用 Skills 并勾选本技能。
+  上传后在沙箱里装一次依赖（会话内即可）：
 
-## 服务端接口（本技能调用）
+  ```bash
+  cd "$WEKNORA_SKILL_DIR" && uv venv --seed .venv && \
+    uv pip install --python .venv/bin/python -r requirements.txt && \
+    python tools/smoke_test.py
+  ```
 
-| 方法 | 路径 | 说明 |
+  没有 `uv` 时退回 `python -m venv .venv && .venv/bin/pip install -r requirements.txt`。
+  配图渲染还要 `playwright install chromium` + 中文字体（`fonts-noto-cjk`）。
+
+## 实现与同步（这套实现从哪来）
+
+本技能的实现**不是在这里手写的**，而是与后端服务**共用同一份代码**：
+
+```
+后端仓库 digital-hub-test/services/*.py      ← 唯一权威源（服务端 bid-mcp 也用它）
+            │  tools/sync_from_backend.py（改写 import + 记账 sha256）
+            ▼
+技能 scripts/bidagent/*.py                   ← 生成物，勿手改
+```
+
+- 想改逻辑：**改后端 `services/`**，再跑 `python tools/sync_from_backend.py` 重新生成；
+  用 `python tools/sync_from_backend.py --check` 可以查两边是否已漂移。
+- 只有 `scripts/bidagent/settings.py` 是技能侧手写的配置垫片（纯标准库读同名环境变量，不参与同步）。
+- `.synced.json` 记录了同步时的后端 commit 与各文件 sha256，供溯源与 `--check` 使用。
+
+这样做的收益：**服务端与沙箱里的 skill 行为逐字节一致**，改一处就两边都对；不会出现"服务器修了 bug，技能里还是老版本"。
+`bid-mcp` 服务**仍然保留**（给走 HTTP 的调用方与 WeKnora 的 MCP 工具用），只是**不再是本技能的依赖**。
+
+| 消费方式 | 入口 | 传输 |
 | --- | --- | --- |
-| GET  | `/api/qualifications` | 资质清单 |
-| POST | `/api/qualify-match`   | 要求 × 资质比对 |
-| POST | `/api/generate-draft`  | 生成两册 Word，返回下载链接 |
-| POST | `/api/rejection/init`  | 创建废标项检查会话 |
-| POST | `/api/rejection/apply` | 提交一个片段的检查增量 |
-| POST | `/api/rejection/finalize` | 收尾并输出报告 |
-| POST | `/api/rejection/export` | 导出 xlsx 报告 |
-| GET  | `/api/rejection/state` | 查看会话状态 |
-| POST | `/api/facts/init` | 建立全局事实清单（注入锁定事实）|
-| POST | `/api/facts/update` | 全量替换事实清单 |
-| POST | `/api/facts/render` | 取事实注入块 |
-| POST | `/api/consistency/build` | 建立一致性台账、找冲突 |
-| POST | `/api/consistency/repair` | 生成逐节修复任务 |
-| POST | `/api/project/init` | 创建标书项目 |
-| GET  | `/api/project/state` | 项目状态（阶段 / 产物 / 关卡）|
-| GET  | `/api/project/next` | 下一步该做什么 |
-| POST | `/api/project/advance` | 声明阶段完成并推进（关卡校验）|
-| GET  | `/api/project/stages` | 阶段定义 |
-| GET  | `/api/figure/types` | 可渲染的配图类型 |
-| GET  | `/api/figure/status` | 渲染环境自检 |
-| POST | `/api/figure/render` | 渲染 Mermaid / HTML 为 PNG |
-| GET  | `/api/template/presets` | 导出模板预设 |
-| GET  | `/api/template/list` | 用户模板列表 |
-| POST | `/api/template/get` | 解析预设/模板为完整配置 |
-| POST | `/api/template/save` | 保存自定义模板 |
-| POST | `/api/template/delete` | 删除自定义模板 |
-| GET  | `/api/html/spec` | 受限 HTML 白名单与示例 |
-| POST | `/api/html/validate` | 校验受限 HTML |
-| GET  | `/api/layout/metrics` | 模板下的页面度量 |
-| POST | `/api/layout/plan` | 字数配额 + 版面估算 |
-| POST | `/api/duplicate/analyze` | 标书查重（确定性引擎）|
-| POST | `/api/review/typo` | 回验错别字 |
-| POST | `/api/review/logic` | 逻辑谬误检查 |
-| POST | `/api/review/export` | 三类检查合并导出 xlsx |
-| GET  | `/files/{name}`        | 下载生成的 docx / xlsx / png（png 在 figures/ 子目录）|
+| 技能沙箱（本技能） | `scripts/bid_tools.py` | 无（直接 import `bidagent.bid_api`）|
+| MCP 工具 | `mcp-server/mcp_server.py` | FastMCP（streamable-http）|
+| REST | `/api/*` | HTTP，返回下载链接 |
+
+三者共用 `services/bid_api.py` 的业务入口层，所以参数、返回体字段、硬规则完全一致；
+差别只在"产物怎么给"：服务端返回**下载链接**，技能本地返回**落盘路径**。
 
 ## 说明与边界
 
 - **只对资质类要求比对**：流程 / 承诺 / 报价类要求会被标为「不适用」，不计入缺口。
 - `draft` 必须提供 `--sections`；`--final` 且存在待补项时会拒绝导出。
-- 报「无法连接 …」：检查 `BID_API_BASE` 是否指向可达的 bid-mcp 服务。
+- 报「找不到资质清单」：把 `manifest.json` 放进 `BID_INPUT_DIR`（默认 `/workspace/input`）。
+- 报「缺 xxx 模块 / 命令找不到」：依赖没装好，先跑 `python tools/smoke_test.py`。
+- 状态持久化在 `BID_STATE_DIR`（默认技能目录 `.state/`）；清理状态即等于重来。
 - Word 的目录与页码需在 Word 中「更新域」；缺失的原件需人工补齐。
 - 废标项检查的**待定项不是结论**，须人工核对原文；只有「已确认风险」带证据支撑。

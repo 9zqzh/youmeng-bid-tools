@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 技能运行时状态（跨会话保留在技能目录下，不入库）
+.state/
+.bid-state/
+
+# 产物（若在技能目录下就地生成）
+output/
+outputs/

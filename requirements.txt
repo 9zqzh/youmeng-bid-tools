@@ -1,0 +1,23 @@
+# 优盟标书工具（技能本地版）依赖
+#
+# 沙箱安装（WeKnora 技能安装阶段会自动做，等价命令）：
+#   uv venv --seed .venv
+#   uv pip install --python .venv/bin/python -r requirements.txt
+#
+# 说明：**不要 pip install 进系统 Python** —— 沙箱镜像是所有技能共用的。
+
+python-docx>=1.1,<2      # 生成两册 Word 初稿
+openpyxl>=3.1            # 检查报告 xlsx（废标项/错别字/逻辑）
+lxml>=5,<7               # 受限 HTML 解析与 HTML→docx
+Pillow>=10,<13           # 图片尺寸/等比缩放
+pypdf>=5,<7              # PDF 文本层解析
+pypdfium2>=4,<6          # PDF 渲染（扫描件走 OCR 时的兜底）
+httpx>=0.27,<1           # 可选：调用外部 doc-service（沙箱里通常用不到）
+
+# 配图渲染（Mermaid / 受限 HTML → PNG）。
+# 装这个包只是 Python 侧；**还需要一个 chromium**：
+#   推荐 apt-get install -y chromium fonts-noto-cjk   （字体不装，图里中文会变方块）
+#   然后设 BID_CHROMIUM_PATH=/usr/bin/chromium
+# 或 `playwright install chromium` 用自带浏览器。
+# 没装也不影响其它功能：只有配图类命令会报错并给出补救提示（见 fig-status）。
+playwright>=1.40,<2
