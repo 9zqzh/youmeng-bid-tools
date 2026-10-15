@@ -1,6 +1,6 @@
 ---
 name: youmeng-bid-tools
-description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、把流程图/思维导图/甘特图/架构图/柱状图等**配图渲染成 PNG**、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、给标书画流程图或图表、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
+description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、把流程图/思维导图/甘特图/架构图/柱状图等**配图渲染成 PNG**、用**导出模板**控制两册 Word 的排版（纸张/字体字号/标题样式/表格/页眉页脚/页码）、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、给标书画流程图或图表、调整标书 Word 排版或套用模板、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
 ---
 
 # 优盟标书工具
@@ -206,13 +206,48 @@ python scripts/bid_tools.py fig-render --figures @figs.json
 
 > 每张图的 `url` 可直接放进 Word 或给前端预览；图片落在服务端 `figures/` 子目录。
 
+### 8) 导出模板（Word 排版）
+
+两册 Word 的排版（纸张/页边距/字体字号/标题样式/表格/页眉页脚/页码格式）可以用模板控制：
+
+```bash
+python scripts/bid_tools.py template-presets                 # 看有哪些预设、各自什么排版
+python scripts/bid_tools.py template-get --template a4-visual  # 解析成完整配置，便于微调
+python scripts/bid_tools.py template-save --name house-style --template @tpl.json
+python scripts/bid_tools.py draft --project "XX项目" --sections @s.json --template house-style
+```
+
+内置预设：
+
+| 预设 | 排版 |
+| --- | --- |
+| `standard` | **默认**，与历史输出一致：A4 纵向、宋体 10.5、宋体黑色标题、仅页码 |
+| `a4-visual` | A4 图文版：11pt / 1.5 倍行距 / 首行缩进、蓝色标题、页眉色条、页脚「第N页」 |
+| `a3-landscape` | A3 横向：适合大表格与大架构图，图片可用宽度更大 |
+
+**自定义模板**：`template-get` 拿到完整配置 → 改字段 → `template-save` 存成自己的名字 →
+之后 `draft --template <名字>` 复用。可写 `base` 继承某个预设后再覆盖。
+
+模板字段：`page`（paper/orientation/margins_cm/first_page_different）、`body`（font/size_pt/
+line_spacing/first_line_indent_chars/align）、`heading`（font/color/size_pts[4]/bold/align/
+space_before_pt/space_after_pt）、`table`（style/header_shading/font_size_pt/caption_prefix）、
+`image`（max_width_cm/max_height_cm/align/caption_prefix）、`header` / `footer`
+（enabled/text/align/size_pt/style/page_number_format）。
+
+**字段取 `null` = 不修改**（沿用 Word 默认）。这正是 `standard` 能与历史输出逐字节一致的原因；
+微调时别把不打算改的字段写成具体值。
+
+**章节配图**：`sections[].images` 里放 `{"file": "flow.png", "title": "评标流程"}`，
+`file` 用 `fig-render` 产出的文件名（也可给绝对路径），`title` 会自动编号成「图 N 标题」；
+表格带 `title` 时同理编号为「表 N 标题」。**没给 title 就不会有题注**（避免给历史产物凭空加题注）。
+
 ## 典型工作流（项目驱动）
 0. `project-init` 建项目；之后**每步先 `project-next` 问下一步、做完用 `project-advance` 交产物**；
 1. `list` 了解企业有哪些资质 → 从招标文件提炼要求 → `match` 逐条比对，汇总「门槛缺口 / 待补充」→ advance 到 `analysis` 完成态；
 2. **`facts-init` 固化全局事实**（处理掉 issues）→ advance 到 `facts`（带 `facts_id`）；
 3. **`facts-render` 逐节注入** → 撰写 `sections`；需要配图时用 `fig-render` 出图并记下 `url` → advance 到 `content`；
 4. **`cons-build` 建账 → `cons-repair` 给统一口径 → 按 `tasks` 修正各节** → advance 到 `consistency`（带 `ledger_id`）；
-5. `draft` 生成 Word，把 `files[].url` 交给用户 → advance 到 `draft`（带 `files`）；
+5. `draft` 生成 Word（需要特定排版就带 `--template <模板名>`，章节里可带 `images` 嵌入第 3 步渲染好的配图），把 `files[].url` 交给用户 → advance 到 `draft`（带 `files`）；
 6. 从招标文件抽取废标项 → `reject-init` → 逐片段 `reject-apply` → `reject-finalize` → `reject-export`，把风险清单（尤其**已确认**项）与 xlsx 链接交给用户 → advance 到 `rejection`（带 `rejection_session_id`）。
 
 若只想做其中一环（例如只查废标项），跳过 `project-*`，直接用对应的单个子命令即可。

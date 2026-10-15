@@ -27,6 +27,11 @@
 | `fig-types` | 列出可渲染的配图类型与渲染方式（画图前先看）|
 | `fig-status` | 配图渲染环境自检（playwright / 浏览器 / mermaid.min.js）|
 | `fig-render` | 把 **Mermaid / 静态 HTML** 渲染成 PNG，返回下载链接 |
+| `template-presets` | 列出导出模板预设及其排版差异 |
+| `template-list` | 列出已保存的自定义模板 |
+| `template-get` | 把预设/模板名解析成完整配置（便于微调）|
+| `template-save` | 保存自定义导出模板（可 `base` 继承预设）|
+| `template-delete` | 删除自定义模板 |
 
 ## 目录结构
 
@@ -92,6 +97,12 @@ python scripts/bid_tools.py project-state --project-id prj-20261015-xxxxxxxx
 # 7) 配图：先看支持哪些类型，再渲染
 python scripts/bid_tools.py fig-types
 python scripts/bid_tools.py fig-render --figures @figs.json
+
+# 8) 导出模板：看预设 → 微调保存 → 出 Word 时套用
+python scripts/bid_tools.py template-presets
+python scripts/bid_tools.py template-get --template a4-visual
+python scripts/bid_tools.py template-save --name house-style --template @tpl.json
+python scripts/bid_tools.py draft --project "XX项目" --sections @s.json --template house-style
 ```
 
 输出均为 JSON：
@@ -110,6 +121,29 @@ python scripts/bid_tools.py fig-render --figures @figs.json
 - `fig-types` → `{supported:[{type,label,kind}], unsupported:[...], kinds, hint}`
 - `fig-status` → `{playwright, browser_configured, mermaid_js, ready, notes}`
 - `fig-render` → `{rendered:[{id,name,url,width,height,bytes}], failed:[{id,error}], summary}`
+- `template-presets` → `{presets:[{name,label,description,paper,orientation,body_size_pt}], fields}`
+- `template-get` / `template-save` → `{name, label, template:{...}}`
+- `template-list` → `{templates:[...], presets:[...]}`
+
+## 导出模板（Word 排版）
+
+两册 Word 的排版可以用模板控制，不必改代码：
+
+| 预设 | 排版 |
+| --- | --- |
+| `standard` | **默认**，与历史输出**逐字节一致**：A4 纵向、宋体 10.5、宋体黑色标题、仅页码 |
+| `a4-visual` | A4 图文版：11pt / 1.5 倍行距 / 首行缩进、蓝色标题、页眉色条、页脚「第N页」 |
+| `a3-landscape` | A3 横向：大表格与大架构图友好，图片可用宽度更大 |
+
+**自定义**：`template-get` 拿完整配置 → 改字段 → `template-save --name house-style` →
+`draft --template house-style` 复用。可写 `base` 继承预设。
+
+**字段取 `null` = 不修改**（沿用 Word 默认）—— 这就是 `standard` 能与历史输出逐字节一致的原因。
+支持的字段：`page` / `body` / `heading` / `table` / `image` / `header` / `footer`（详见 `template-presets` 的 `fields`）。
+
+**章节配图与题注**：`sections[].images = [{"file":"flow.png","title":"评标流程"}]`，
+`file` 用 `fig-render` 产出的文件名；有 `title` 才生成题注，自动编号「图 N 标题」/「表 N 标题」。
+页码是**可刷新的 PAGE 域**（不是写死的数字），Word 里按 F9 更新。
 
 ## 配图渲染（Mermaid / HTML → PNG）
 
@@ -204,6 +238,11 @@ python scripts/bid_tools.py fig-render --figures @figs.json
 | GET  | `/api/figure/types` | 可渲染的配图类型 |
 | GET  | `/api/figure/status` | 渲染环境自检 |
 | POST | `/api/figure/render` | 渲染 Mermaid / HTML 为 PNG |
+| GET  | `/api/template/presets` | 导出模板预设 |
+| GET  | `/api/template/list` | 用户模板列表 |
+| POST | `/api/template/get` | 解析预设/模板为完整配置 |
+| POST | `/api/template/save` | 保存自定义模板 |
+| POST | `/api/template/delete` | 删除自定义模板 |
 | GET  | `/files/{name}`        | 下载生成的 docx / xlsx / png（png 在 figures/ 子目录）|
 
 ## 说明与边界

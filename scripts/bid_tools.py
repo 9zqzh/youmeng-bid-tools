@@ -10,6 +10,7 @@
   POST /api/consistency/build | /repair
   POST /api/project/init | /advance        GET /api/project/state | /next | /stages
   GET  /api/figure/types | /status         POST /api/figure/render
+  GET  /api/template/presets | /list       POST /api/template/get | /save | /delete
 
 子命令：
   list                                           列出企业资质清单
@@ -40,6 +41,11 @@
   fig-types                                      列出可渲染的配图类型与渲染方式
   fig-status                                     配图渲染环境自检
   fig-render    --figures <JSON|@file>           把 Mermaid/HTML 渲染成 PNG（返回下载链接）
+  template-presets                               列出导出模板预设
+  template-list                                  列出已保存的自定义模板
+  template-get  [--template <名>]                把预设/模板名解析成完整配置
+  template-save --name X --template <JSON|@file> 保存自定义导出模板
+  template-delete --name X                       删除自定义模板
 
 仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
 
@@ -99,6 +105,7 @@ def main() -> int:
     p_draft.add_argument("--qualifications", default="", help="要嵌入的资质 id，逗号分隔")
     p_draft.add_argument("--bid-no", default="")
     p_draft.add_argument("--final", action="store_true")
+    p_draft.add_argument("--template", default="", help="导出模板名（预设 standard/a4-visual/a3-landscape 或自定义）")
 
     p_ri = sub.add_parser("reject-init", help="创建废标项检查会话")
     p_ri.add_argument("--items", required=True, help="无效投标/废标项清单数组 JSON 或 @file")
@@ -165,6 +172,19 @@ def main() -> int:
     p_fr = sub.add_parser("fig-render", help="把 Mermaid/HTML 渲染成 PNG")
     p_fr.add_argument("--figures", required=True, help="图数组 JSON 或 @file")
 
+    sub.add_parser("template-presets", help="列出导出模板预设")
+    sub.add_parser("template-list", help="列出已保存的自定义模板")
+
+    p_tg = sub.add_parser("template-get", help="把预设/模板名解析成完整配置")
+    p_tg.add_argument("--template", default="", help="预设名或模板名；留空取 standard")
+
+    p_ts = sub.add_parser("template-save", help="保存自定义导出模板")
+    p_ts.add_argument("--name", required=True, help="模板名（字母数字与 _ -）")
+    p_ts.add_argument("--template", required=True, help="模板对象 JSON 或 @file（可含 base 继承预设）")
+
+    p_td = sub.add_parser("template-delete", help="删除自定义模板")
+    p_td.add_argument("--name", required=True)
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -179,6 +199,7 @@ def main() -> int:
             "qualification_ids": [q.strip() for q in args.qualifications.split(",") if q.strip()],
             "bid_no": args.bid_no,
             "final": args.final,
+            "template": args.template or None,
         })
     elif args.command == "reject-init":
         result = _request("POST", "/api/rejection/init", {
@@ -235,6 +256,17 @@ def main() -> int:
         result = _request("GET", "/api/figure/status")
     elif args.command == "fig-render":
         result = _request("POST", "/api/figure/render", {"figures": _load_json_arg(args.figures)})
+    elif args.command == "template-presets":
+        result = _request("GET", "/api/template/presets")
+    elif args.command == "template-list":
+        result = _request("GET", "/api/template/list")
+    elif args.command == "template-get":
+        result = _request("POST", "/api/template/get", {"template": args.template or None})
+    elif args.command == "template-save":
+        result = _request("POST", "/api/template/save", {
+            "name": args.name, "template": _load_json_arg(args.template)})
+    elif args.command == "template-delete":
+        result = _request("POST", "/api/template/delete", {"name": args.name})
     else:
         result = _request("POST", "/api/project/advance", {
             "project_id": args.project_id,
