@@ -24,6 +24,9 @@
 | `project-state` | 查看项目：当前阶段 / 各阶段状态（done / accepted / blocked / pending）/ 关卡结论 |
 | `project-next` | 问「下一步该做什么」，直接给阶段指引与要带的产物 |
 | `project-advance` | 声明某阶段完成并推进，**带关卡校验**（不达标拒绝；`--force` 可跳过并留痕）|
+| `fig-types` | 列出可渲染的配图类型与渲染方式（画图前先看）|
+| `fig-status` | 配图渲染环境自检（playwright / 浏览器 / mermaid.min.js）|
+| `fig-render` | 把 **Mermaid / 静态 HTML** 渲染成 PNG，返回下载链接 |
 
 ## 目录结构
 
@@ -85,6 +88,10 @@ python scripts/bid_tools.py project-next  --project-id prj-20261015-xxxxxxxx
 python scripts/bid_tools.py project-advance --project-id prj-20261015-xxxxxxxx \
   --stage facts --artifacts '{"facts_id":"facts-20261015-xxxxxxxx"}'
 python scripts/bid_tools.py project-state --project-id prj-20261015-xxxxxxxx
+
+# 7) 配图：先看支持哪些类型，再渲染
+python scripts/bid_tools.py fig-types
+python scripts/bid_tools.py fig-render --figures @figs.json
 ```
 
 输出均为 JSON：
@@ -100,6 +107,29 @@ python scripts/bid_tools.py project-state --project-id prj-20261015-xxxxxxxx
 - `cons-repair` → `{tasks:[{section_id,title,instructions}], unresolved, unused_rules, summary}`
 - `project-init` / `project-state` / `project-advance` → `{project_id, stage, stages[], artifacts, blockers, warnings, can_advance, next}`
 - `project-next` → `{action, stage, label, guide, advance_with}`
+- `fig-types` → `{supported:[{type,label,kind}], unsupported:[...], kinds, hint}`
+- `fig-status` → `{playwright, browser_configured, mermaid_js, ready, notes}`
+- `fig-render` → `{rendered:[{id,name,url,width,height,bytes}], failed:[{id,error}], summary}`
+
+## 配图渲染（Mermaid / HTML → PNG）
+
+标书里的图绝大多数是**结构图与图表**，用 Mermaid 与 HTML+SVG **确定性渲染**比生图更可控、可复现、也更清晰。
+
+| 渲染方式 | 适用类型 |
+| --- | --- |
+| `mermaid` | 思维导图 / 流程图 / 实体关系图 / 时序图 / 状态图 / 类图 |
+| `html` | 甘特图 / 组织架构 / 泳道 / RACI / 风险矩阵 / 系统架构 / 拓扑 / WBS / 鱼骨 / 柱状 / 折线 / 饼 / 雷达 / 面积 / 散点 / 时间轴 |
+| 不支持 | 实物照片 / 场景效果图 / 抠图 / 剖视图 / 爆炸分解图 / 三维渲染（**需生图模型**，本期不做）|
+
+**四条硬规则**（服务端强制）：
+
+1. `type` 可省，但给了就自动决定渲染方式（也接受中文标签，如「甘特图」）。
+2. **html 只允许静态 HTML+CSS+SVG**：含 `<script>` / `<iframe>` / 内联事件 / `javascript:` 会被拒绝。
+3. **渲染时网络已切断**：不能引用外部图片、字体、CSS（引了也不会加载），内容必须自包含。
+4. **逐张容错**：单张失败不影响其它，`failed` 里带原因，可只重交失败的。
+
+图片落在服务端 `figures/` 子目录，通过 `/files/figures/<name>.png` 下载；`rendered[].url` 可直接使用。
+渲染环境自检用 `fig-status`：它会告诉你 playwright 是否可用、浏览器来源、`mermaid.min.js` 是否就位。
 
 ## 项目工作流（把全链路串成一条带关卡的可续跑链路）
 
@@ -171,7 +201,10 @@ python scripts/bid_tools.py project-state --project-id prj-20261015-xxxxxxxx
 | GET  | `/api/project/next` | 下一步该做什么 |
 | POST | `/api/project/advance` | 声明阶段完成并推进（关卡校验）|
 | GET  | `/api/project/stages` | 阶段定义 |
-| GET  | `/files/{name}`        | 下载生成的 docx / xlsx |
+| GET  | `/api/figure/types` | 可渲染的配图类型 |
+| GET  | `/api/figure/status` | 渲染环境自检 |
+| POST | `/api/figure/render` | 渲染 Mermaid / HTML 为 PNG |
+| GET  | `/files/{name}`        | 下载生成的 docx / xlsx / png（png 在 figures/ 子目录）|
 
 ## 说明与边界
 

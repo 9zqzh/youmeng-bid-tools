@@ -9,6 +9,7 @@
   POST /api/facts/init | /update | /render
   POST /api/consistency/build | /repair
   POST /api/project/init | /advance        GET /api/project/state | /next | /stages
+  GET  /api/figure/types | /status         POST /api/figure/render
 
 子命令：
   list                                           列出企业资质清单
@@ -36,6 +37,9 @@
   project-next  --project-id <id>                下一步该做什么
   project-advance --project-id <id> --stage <key> [--artifacts <JSON|@file>] [--force]
                                                  声明某阶段完成并推进（带关卡校验）
+  fig-types                                      列出可渲染的配图类型与渲染方式
+  fig-status                                     配图渲染环境自检
+  fig-render    --figures <JSON|@file>           把 Mermaid/HTML 渲染成 PNG（返回下载链接）
 
 仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
 
@@ -155,6 +159,12 @@ def main() -> int:
     p_pa.add_argument("--artifacts", default="", help="产物对象 JSON 或 @file，如 '{\"facts_id\":\"facts-..\"}'")
     p_pa.add_argument("--force", action="store_true", help="关卡不过也强行推进（会在项目里留痕）")
 
+    sub.add_parser("fig-types", help="列出可渲染的配图类型与渲染方式（画图前先看）")
+    sub.add_parser("fig-status", help="配图渲染环境自检")
+
+    p_fr = sub.add_parser("fig-render", help="把 Mermaid/HTML 渲染成 PNG")
+    p_fr.add_argument("--figures", required=True, help="图数组 JSON 或 @file")
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -219,6 +229,12 @@ def main() -> int:
         result = _request("GET", f"/api/project/state?project_id={args.project_id}")
     elif args.command == "project-next":
         result = _request("GET", f"/api/project/next?project_id={args.project_id}")
+    elif args.command == "fig-types":
+        result = _request("GET", "/api/figure/types")
+    elif args.command == "fig-status":
+        result = _request("GET", "/api/figure/status")
+    elif args.command == "fig-render":
+        result = _request("POST", "/api/figure/render", {"figures": _load_json_arg(args.figures)})
     else:
         result = _request("POST", "/api/project/advance", {
             "project_id": args.project_id,

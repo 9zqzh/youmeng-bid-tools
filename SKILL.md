@@ -1,6 +1,6 @@
 ---
 name: youmeng-bid-tools
-description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
+description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、把流程图/思维导图/甘特图/架构图/柱状图等**配图渲染成 PNG**、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、给标书画流程图或图表、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
 ---
 
 # 优盟标书工具
@@ -173,12 +173,44 @@ python scripts/bid_tools.py cons-repair --ledger <id> --rules '[{"target":"质�
 **`unresolved` 非空说明有冲突没给出口径**，必须补齐 `rules` 重跑，直到 `summary.ok=true`。
 然后按 `tasks[].instructions` 逐节改写对应小节，改完可再跑一次 `cons-build` 复核。
 
-## 典型工作流（项目驱动）
+### 7) 配图渲染（Mermaid / HTML → PNG）
 
+流程图、思维导图、甘特图、架构图、柱状图这类图，交给服务端**确定性渲染**成 PNG。
+（本期没有生图模型，实物照片 / 场景效果图 / 剖视图这类画不了，见 `fig-types`。）
+
+```bash
+python scripts/bid_tools.py fig-types              # 先看支持哪些类型、分别走哪种渲染方式
+python scripts/bid_tools.py fig-status             # 环境自检：playwright / 浏览器 / mermaid.min.js
+python scripts/bid_tools.py fig-render --figures @figs.json
+```
+
+`figs.json` 示例：
+
+```json
+[
+  {"id": "flow", "type": "flowchart", "title": "评标流程",
+   "mermaid": "flowchart TD\n  A[招标文件解析] --> B{资格性审查}\n  B -->|通过| C[技术方案编制]\n  B -->|不通过| D[废标]"},
+  {"id": "bar", "type": "bar", "title": "人员配置",
+   "html": "<div style=\"font-family:sans-serif\"><h3 style=\"color:#1a4d8f\">人员配置</h3><div style=\"display:flex;gap:8px;align-items:flex-end\"><div style=\"width:70px;height:120px;background:#4a90d9\"></div><div style=\"width:70px;height:70px;background:#7fb069\"></div></div></div>"}
+]
+```
+
+返回 `{rendered:[{id,name,url,width,height}], failed:[{id,error}], summary}`。
+
+**四条规则：**
+
+1. `type` 可省，但给了就能自动决定渲染方式（`flowchart`/`流程图` → mermaid；`gantt`/`甘特图`/`bar`/`柱状图` → html）。
+2. **html 只允许静态 HTML+CSS+SVG**：含 `<script>` / `<iframe>` / 内联事件（`onclick=`）/ `javascript:` 会被拒绝。图表请用**内联样式或手写 SVG** 画。
+3. **渲染时网络已切断**：不能引用外部图片/字体/CSS（引了也不会加载），所以内容必须自包含。
+4. **逐张容错**：某张失败不影响其它，`failed` 里带原因，改好后可只重交失败的那几张。
+
+> 每张图的 `url` 可直接放进 Word 或给前端预览；图片落在服务端 `figures/` 子目录。
+
+## 典型工作流（项目驱动）
 0. `project-init` 建项目；之后**每步先 `project-next` 问下一步、做完用 `project-advance` 交产物**；
 1. `list` 了解企业有哪些资质 → 从招标文件提炼要求 → `match` 逐条比对，汇总「门槛缺口 / 待补充」→ advance 到 `analysis` 完成态；
 2. **`facts-init` 固化全局事实**（处理掉 issues）→ advance 到 `facts`（带 `facts_id`）；
-3. **`facts-render` 逐节注入** → 撰写 `sections` → advance 到 `content`；
+3. **`facts-render` 逐节注入** → 撰写 `sections`；需要配图时用 `fig-render` 出图并记下 `url` → advance 到 `content`；
 4. **`cons-build` 建账 → `cons-repair` 给统一口径 → 按 `tasks` 修正各节** → advance 到 `consistency`（带 `ledger_id`）；
 5. `draft` 生成 Word，把 `files[].url` 交给用户 → advance 到 `draft`（带 `files`）；
 6. 从招标文件抽取废标项 → `reject-init` → 逐片段 `reject-apply` → `reject-finalize` → `reject-export`，把风险清单（尤其**已确认**项）与 xlsx 链接交给用户 → advance 到 `rejection`（带 `rejection_session_id`）。
