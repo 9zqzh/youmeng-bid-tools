@@ -13,6 +13,7 @@
   GET  /api/template/presets | /list       POST /api/template/get | /save | /delete
   GET  /api/html/spec                      POST /api/html/validate
   GET  /api/layout/metrics                 POST /api/layout/plan
+  POST /api/duplicate/analyze
 
 子命令：
   list                                           列出企业资质清单
@@ -54,6 +55,8 @@
   layout-plan   --sections <JSON|@file> [--template <名>] [--total-words N]
                 [--section-words N] [--min-words N] [--max-words N]
                                                  字数配额 + 版面估算 + 偏差与建议
+  dup-analyze   --documents <JSON|@file> [--tender <文本|@文件>] [--tender-path <路径>]
+                                                 标书查重（确定性：白名单剔除 + 分层比对 + 候选对）
 
 仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
 
@@ -215,6 +218,11 @@ def main() -> int:
     p_lp.add_argument("--min-words", type=int, default=0, help="单节目标下限")
     p_lp.add_argument("--max-words", type=int, default=0, help="单节目标上限")
 
+    p_da = sub.add_parser("dup-analyze", help="标书查重（确定性引擎：白名单剔除 + 分层比对）")
+    p_da.add_argument("--documents", required=True, help="待比对文件数组 JSON 或 @file")
+    p_da.add_argument("--tender", default="", help="招标原文（字符串或 @文件）；强烈建议提供，否则会大面积误报")
+    p_da.add_argument("--tender-path", default="", help="或给服务器上的招标文件路径，由服务端解析")
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -310,6 +318,12 @@ def main() -> int:
             if value:
                 payload[key] = value
         result = _request("POST", "/api/layout/plan", payload)
+    elif args.command == "dup-analyze":
+        result = _request("POST", "/api/duplicate/analyze", {
+            "documents": _load_json_arg(args.documents),
+            "tender_text": _load_text_arg(args.tender) if args.tender else None,
+            "tender_path": args.tender_path or None,
+        })
     else:
         result = _request("POST", "/api/project/advance", {
             "project_id": args.project_id,

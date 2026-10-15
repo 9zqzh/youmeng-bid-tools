@@ -36,6 +36,7 @@
 | `html-validate` | 校验一段受限 HTML（出稿前自查）|
 | `layout-metrics` | 算出一套模板下每页能装多少字 |
 | `layout-plan` | 字数配额 + 版面估算 + 偏差与建议（出稿前自查篇幅）|
+| `dup-analyze` | **多份投标文件查重**（招标白名单剔除 + 句级/目录/元数据/图片四层比对 + 候选对）|
 
 ## 目录结构
 
@@ -115,6 +116,9 @@ python scripts/bid_tools.py html-validate --html @body.html
 # 10) 版面与字数配额：出稿前自查篇幅
 python scripts/bid_tools.py layout-metrics --template a4-visual
 python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 60000 --min-words 800
+
+# 11) 查重：多份投标文件比对（务必带上招标原文，否则会大面积误报）
+python scripts/bid_tools.py dup-analyze --documents @docs.json --tender @tender.txt
 ```
 
 输出均为 JSON：
@@ -140,6 +144,32 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 - `html-validate` → `{ok, issues:[{level,kind,message,tag,attr}], stats, message}`
 - `layout-metrics` → `{template, label, metrics:{chars_per_line, lines_per_page, chars_per_page, usable_cm, note}}`
 - `layout-plan` → `{metrics, budget:{mode,target_total,sections}, sections:[...flags], summary, suggestions, note}`
+- `dup-analyze` → `{signature, summary, content, outline:{pairs}, metadata:{documents,findings}, images, candidates, tender_whitelist, warnings, note}`
+
+## 标书查重（确定性引擎）
+
+比对多份投标文件的雷同，**不调用模型**，结果可复核可复现。
+
+```bash
+python scripts/bid_tools.py dup-analyze --documents @docs.json --tender @tender.txt
+```
+
+**`--tender`（招标原文）强烈建议提供。** 招标须知 / 格式要求 / 评标办法会被各家大段照抄，
+不做剔除会**大面积误报**成"雷同"；命中招标来源的句子会单独归类为「招标原文引用」，不计入统计。
+
+| 层 | 内容 |
+| --- | --- |
+| `content` | 句子级雷同（归一化精确 + 二元组 Dice 近重复）+ 招标白名单剔除量 |
+| `outline` | 目录相似度（路径 0.45 / 标题 0.35 / 顺序 0.2）与 high/medium/low 风险档 |
+| `metadata` | 同源取证：整文件 sha256、docx 的 rsid 编辑会话指纹、PDF trailer ID / 增量更新 / 签名数 |
+| `images` | 图片字节 sha256 复用 |
+
+`documents` 每项 `{id?, name?, text?|path?}`：给 `text` 只做文本层；给 `path` 才做元数据与图片层。
+`candidates` 形如 `{current_source_id, reference_source_id, similarity, overlap_excerpt}`，
+可直接喂给解释型模型节点。`signature` 是输入指纹 —— **内容一变就该把旧结论标记为失效**。
+
+> **边界**：相似度**不等于法律侵权或围串标证据**，只说明文字/结构层面重合；
+> 「法定固定格式 vs 实质重复」的定性判断交给模型，引擎只给可复核的数值与原文摘录。
 
 ## 版面与字数配额
 
@@ -303,6 +333,7 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 | POST | `/api/html/validate` | 校验受限 HTML |
 | GET  | `/api/layout/metrics` | 模板下的页面度量 |
 | POST | `/api/layout/plan` | 字数配额 + 版面估算 |
+| POST | `/api/duplicate/analyze` | 标书查重（确定性引擎）|
 | GET  | `/files/{name}`        | 下载生成的 docx / xlsx / png（png 在 figures/ 子目录）|
 
 ## 说明与边界
