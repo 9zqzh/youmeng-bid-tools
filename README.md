@@ -37,6 +37,9 @@
 | `layout-metrics` | 算出一套模板下每页能装多少字 |
 | `layout-plan` | 字数配额 + 版面估算 + 偏差与建议（出稿前自查篇幅）|
 | `dup-analyze` | **多份投标文件查重**（招标白名单剔除 + 句级/目录/元数据/图片四层比对 + 候选对）|
+| `typo-check` | 回验错别字（**定位不到的直接排除**，招标既有用词降级为待核对）|
+| `logic-check` | 逻辑谬误（跨段前后矛盾）|
+| `check-export` | 把 **废标项/错别字/逻辑** 导出到**同一份 xlsx** |
 
 ## 目录结构
 
@@ -119,6 +122,11 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 
 # 11) 查重：多份投标文件比对（务必带上招标原文，否则会大面积误报）
 python scripts/bid_tools.py dup-analyze --documents @docs.json --tender @tender.txt
+
+# 12) 错别字与逻辑谬误（三类检查可合并导出同一份 xlsx）
+python scripts/bid_tools.py typo-check --candidates @typos.json --source @bid.txt --tender @tender.txt
+python scripts/bid_tools.py logic-check --segments @segments.json --extractions @extractions.json
+python scripts/bid_tools.py check-export --rejection-session <id> --typo-id <id> --logic-id <id>
 ```
 
 输出均为 JSON：
@@ -145,6 +153,29 @@ python scripts/bid_tools.py dup-analyze --documents @docs.json --tender @tender.
 - `layout-metrics` → `{template, label, metrics:{chars_per_line, lines_per_page, chars_per_page, usable_cm, note}}`
 - `layout-plan` → `{metrics, budget:{mode,target_total,sections}, sections:[...flags], summary, suggestions, note}`
 - `dup-analyze` → `{signature, summary, content, outline:{pairs}, metadata:{documents,findings}, images, candidates, tender_whitelist, warnings, note}`
+- `typo-check` → `{review_id, findings:[{status,location,line_text,wrong,right,...}], unlocated, invalid, summary, warnings, note}`
+- `logic-check` → `{review_id, findings:[{type,category,name,segments,distinct,detail}], register, summary, warnings, note}`
+- `check-export` → `{name, url, sheets}`
+
+## 错别字与逻辑谬误检查
+
+两件事，都遵循同一原则：**模型提线索，程序回验**。
+
+**错别字**：你给出候选，工具回原文查证 —— 模型对专业术语很容易"造错"，所以定位不到的**直接排除**。
+
+| 状态 | 含义 |
+| --- | --- |
+| `confirmed` | 原文已定位，且该文本不在招标原文里 → 可以改 |
+| `needs_review` | 该文本**出现在招标原文里**，可能是招标方既有用词 → 人工确认 |
+| `unlocated` | **原文里找不到，疑似误判，已排除** |
+
+同一个错别字出现多次时，会优先用你给的 `context` 锁定**它自己那一次**（定位点始终指向错别字本身）。
+正文与招标都支持给文件路径（`--source-path` / `--tender-path`），大文档走路径更稳。
+
+**逻辑谬误**：逐段上报事实 → 程序按 (分类, 名称) 归集登记 → **跨段取值不一致即判前后矛盾**。
+只比类型化事实（人数/工期/金额/技术参数…），用词与文风差异不进入比较。
+
+**合并导出**：`check-export` 把三类结果写进**同一份 xlsx** —— `检查概览 / 废标项 / 待定风险 / 错别字 / 逻辑问题`。
 
 ## 标书查重（确定性引擎）
 
@@ -334,6 +365,9 @@ python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 
 | GET  | `/api/layout/metrics` | 模板下的页面度量 |
 | POST | `/api/layout/plan` | 字数配额 + 版面估算 |
 | POST | `/api/duplicate/analyze` | 标书查重（确定性引擎）|
+| POST | `/api/review/typo` | 回验错别字 |
+| POST | `/api/review/logic` | 逻辑谬误检查 |
+| POST | `/api/review/export` | 三类检查合并导出 xlsx |
 | GET  | `/files/{name}`        | 下载生成的 docx / xlsx / png（png 在 figures/ 子目录）|
 
 ## 说明与边界

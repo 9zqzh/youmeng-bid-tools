@@ -14,6 +14,7 @@
   GET  /api/html/spec                      POST /api/html/validate
   GET  /api/layout/metrics                 POST /api/layout/plan
   POST /api/duplicate/analyze
+  POST /api/review/typo | /logic | /export
 
 子命令：
   list                                           列出企业资质清单
@@ -57,6 +58,13 @@
                                                  字数配额 + 版面估算 + 偏差与建议
   dup-analyze   --documents <JSON|@file> [--tender <文本|@文件>] [--tender-path <路径>]
                                                  标书查重（确定性：白名单剔除 + 分层比对 + 候选对）
+  typo-check    --candidates <JSON|@file> [--source <文本|@文件> | --source-path <路径>]
+                [--tender <文本|@文件> | --tender-path <路径>]
+                                                 回验错别字（定位不到的直接排除）
+  logic-check   --segments <JSON|@file> --extractions <JSON|@file>
+                                                 逻辑谬误检查（跨段前后矛盾）
+  check-export  [--rejection-session <id>] [--typo-id <id>] [--logic-id <id>] [--project X]
+                                                 把 废标项/错别字/逻辑 导出到同一份 xlsx
 
 仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
 
@@ -223,6 +231,23 @@ def main() -> int:
     p_da.add_argument("--tender", default="", help="招标原文（字符串或 @文件）；强烈建议提供，否则会大面积误报")
     p_da.add_argument("--tender-path", default="", help="或给服务器上的招标文件路径，由服务端解析")
 
+    p_tc = sub.add_parser("typo-check", help="回验错别字候选（定位不到的直接排除）")
+    p_tc.add_argument("--candidates", required=True, help="候选数组 JSON 或 @file")
+    p_tc.add_argument("--source", default="", help="待检查正文（字符串或 @文件）")
+    p_tc.add_argument("--source-path", default="", help="或服务器上的正文文件路径")
+    p_tc.add_argument("--tender", default="", help="招标原文（字符串或 @文件）；强烈建议提供")
+    p_tc.add_argument("--tender-path", default="", help="或服务器上的招标文件路径")
+
+    p_lc = sub.add_parser("logic-check", help="逻辑谬误检查（跨段前后矛盾）")
+    p_lc.add_argument("--segments", required=True, help="小节数组 JSON 或 @file")
+    p_lc.add_argument("--extractions", required=True, help="逐段抽取结果数组 JSON 或 @file")
+
+    p_ce = sub.add_parser("check-export", help="把 废标项/错别字/逻辑 导出到同一份 xlsx")
+    p_ce.add_argument("--rejection-session", default="", help="废标项检查 session_id（可选）")
+    p_ce.add_argument("--typo-id", default="", help="typo-check 返回的 review_id（可选）")
+    p_ce.add_argument("--logic-id", default="", help="logic-check 返回的 review_id（可选）")
+    p_ce.add_argument("--project", default="", help="项目名称（仅正文检查时用于命名）")
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -323,6 +348,26 @@ def main() -> int:
             "documents": _load_json_arg(args.documents),
             "tender_text": _load_text_arg(args.tender) if args.tender else None,
             "tender_path": args.tender_path or None,
+        })
+    elif args.command == "typo-check":
+        result = _request("POST", "/api/review/typo", {
+            "candidates": _load_json_arg(args.candidates),
+            "source_text": _load_text_arg(args.source) if args.source else None,
+            "source_path": args.source_path or None,
+            "tender_text": _load_text_arg(args.tender) if args.tender else None,
+            "tender_path": args.tender_path or None,
+        })
+    elif args.command == "logic-check":
+        result = _request("POST", "/api/review/logic", {
+            "segments": _load_json_arg(args.segments),
+            "extractions": _load_json_arg(args.extractions),
+        })
+    elif args.command == "check-export":
+        result = _request("POST", "/api/review/export", {
+            "rejection_session_id": args.rejection_session or None,
+            "typo_id": args.typo_id or None,
+            "logic_id": args.logic_id or None,
+            "project_name": args.project,
         })
     else:
         result = _request("POST", "/api/project/advance", {
