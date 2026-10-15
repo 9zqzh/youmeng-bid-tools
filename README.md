@@ -34,6 +34,8 @@
 | `template-delete` | 删除自定义模板 |
 | `html-spec` | 受限 HTML 正文的白名单与示例（写正文前先看）|
 | `html-validate` | 校验一段受限 HTML（出稿前自查）|
+| `layout-metrics` | 算出一套模板下每页能装多少字 |
+| `layout-plan` | 字数配额 + 版面估算 + 偏差与建议（出稿前自查篇幅）|
 
 ## 目录结构
 
@@ -109,6 +111,10 @@ python scripts/bid_tools.py draft --project "XX项目" --sections @s.json --temp
 # 9) 受限 HTML 正文：先看白名单，再自查
 python scripts/bid_tools.py html-spec
 python scripts/bid_tools.py html-validate --html @body.html
+
+# 10) 版面与字数配额：出稿前自查篇幅
+python scripts/bid_tools.py layout-metrics --template a4-visual
+python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 60000 --min-words 800
 ```
 
 输出均为 JSON：
@@ -132,6 +138,29 @@ python scripts/bid_tools.py html-validate --html @body.html
 - `template-list` → `{templates:[...], presets:[...]}`
 - `html-spec` → `{block_tags, heading_tags, inline_tags, attributes, not_supported, example, rules}`
 - `html-validate` → `{ok, issues:[{level,kind,message,tag,attr}], stats, message}`
+- `layout-metrics` → `{template, label, metrics:{chars_per_line, lines_per_page, chars_per_page, usable_cm, note}}`
+- `layout-plan` → `{metrics, budget:{mode,target_total,sections}, sections:[...flags], summary, suggestions, note}`
+
+## 版面与字数配额
+
+出稿前用**确定性估算**把明显问题挡住，不必等翻 Word 才发现篇幅不对。
+
+```bash
+python scripts/bid_tools.py layout-metrics --template a4-visual
+python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 60000 --min-words 800
+```
+
+| 块 | 内容 |
+| --- | --- |
+| `budget` | 按各节 `weight` 把总字数分配成每节目标（受 `min_words`/`max_words` 约束）；某节自带 `target_words` 或给 `section_words` 则直接采用 |
+| `sections[]` | 每节字数 / 目标 / 偏离度 / **估算页数** / **末页填充率** / 图片表格数 / `flags` |
+| `suggestions` | 扩写多少字、精简多少字、末页只填了 N% 建议调整字数或把图表挪到相邻小节 |
+
+`flags`：`字数不足` / `字数超出` / `页尾空洞` / `配图缺失`（阈值：偏离 20%、末页填充 < 35%）。
+
+> **是估算，不是 Word 实际分页。** 由模板的纸张/页边距/字号/行距推算每页字数，图片高度按
+> **真实像素**与模板画框换算。用于出稿前自查，**不能替代在 Word 里核对版式**。
+> 想让某节正好占满整页：目标字数定在「页数 × 每页字数」附近。
 
 ## 受限 HTML 正文
 
@@ -272,6 +301,8 @@ python scripts/bid_tools.py html-validate --html @body.html
 | POST | `/api/template/delete` | 删除自定义模板 |
 | GET  | `/api/html/spec` | 受限 HTML 白名单与示例 |
 | POST | `/api/html/validate` | 校验受限 HTML |
+| GET  | `/api/layout/metrics` | 模板下的页面度量 |
+| POST | `/api/layout/plan` | 字数配额 + 版面估算 |
 | GET  | `/files/{name}`        | 下载生成的 docx / xlsx / png（png 在 figures/ 子目录）|
 
 ## 说明与边界

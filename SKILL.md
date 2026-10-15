@@ -1,6 +1,6 @@
 ---
 name: youmeng-bid-tools
-description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、把流程图/思维导图/甘特图/架构图/柱状图等**配图渲染成 PNG**、用**导出模板**控制两册 Word 的排版（纸张/字体字号/标题样式/表格/页眉页脚/页码）、用**受限 HTML** 撰写有结构的正文（列表/子标题/表格/图注）、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、给标书画流程图或图表、调整标书 Word 排版或套用模板、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
+description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、把流程图/思维导图/甘特图/架构图/柱状图等**配图渲染成 PNG**、用**导出模板**控制两册 Word 的排版（纸张/字体字号/标题样式/表格/页眉页脚/页码）、用**受限 HTML** 撰写有结构的正文（列表/子标题/表格/图注）、用**版面估算与字数配额**在出稿前发现篇幅问题（字数偏离、末页空洞）、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、给标书画流程图或图表、调整标书 Word 排版或套用模板、控制标书篇幅与字数、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
 ---
 
 # 优盟标书工具
@@ -273,11 +273,36 @@ python scripts/bid_tools.py html-validate --html @body.html  # 出稿前自查
 > `html` 与 `content` **二选一，html 优先**（同时给会按 html 渲染并在 warnings 里提示）。
 > **务必先 `html-validate` 再出稿**：校验不过 `draft` 会直接报错（带具体是哪处、该怎么改），白跑一轮。
 
+### 10) 版面与字数配额（出稿前自查）
+
+两册 Word 的篇幅可以先用**确定性估算**把明显问题挡在出稿前，不必等出完稿翻 Word 才发现。
+
+```bash
+python scripts/bid_tools.py layout-metrics --template a4-visual   # 一页能装多少字
+python scripts/bid_tools.py layout-plan --sections @sections.json --total-words 60000 \
+  --min-words 800 --template a4-visual
+```
+
+`layout-plan` 返回三块：
+
+| 块 | 内容 |
+| --- | --- |
+| `budget` | 按各节 `weight` 把 `--total-words` 分配成每节目标字数（`--min-words`/`--max-words` 约束）；某节自带 `target_words` 或给 `--section-words` 则直接采用 |
+| `sections[]` | 每节字数、目标、偏离度、**估算页数**、**末页填充率**、图片/表格数、`flags` |
+| `suggestions` | 可执行动作：扩写多少字 / 精简多少字 / 末页只填了 N% 建议调整字数或把图表挪到相邻小节 |
+
+`flags` 取值：`字数不足` / `字数超出` / `页尾空洞` / `配图缺失`（阈值：偏离 20%、末页填充 < 35%）。
+`sections` 与 `draft` 同构（`title` / `content` / `html` / `images` / `table`，可另加 `weight` / `target_words`）。
+
+> **这是估算，不是 Word 实际分页。** 它由模板的纸张/页边距/字号/行距推出每页字数，图片高度按
+> **真实像素**与模板画框换算。用途是出稿前发现明显问题，**不能替代在 Word 里核对版式**。
+> 想让某节正好占满整页：把目标字数定在「页数 × 每页字数」附近即可。
+
 ## 典型工作流（项目驱动）
 0. `project-init` 建项目；之后**每步先 `project-next` 问下一步、做完用 `project-advance` 交产物**；
 1. `list` 了解企业有哪些资质 → 从招标文件提炼要求 → `match` 逐条比对，汇总「门槛缺口 / 待补充」→ advance 到 `analysis` 完成态；
 2. **`facts-init` 固化全局事实**（处理掉 issues）→ advance 到 `facts`（带 `facts_id`）；
-3. **`facts-render` 逐节注入** → 撰写各节正文（推荐用 `sections[].html` 写有结构的正文，先 `html-spec` 看白名单、`html-validate` 自查）；需要配图时用 `fig-render` 出图并在 html 里用 `<figure><img src="图名"/><figcaption>图题</figcaption></figure>` 引用 → advance 到 `content`；
+3. **`facts-render` 逐节注入** → 撰写各节正文（推荐用 `sections[].html` 写有结构的正文，先 `html-spec` 看白名单、`html-validate` 自查）；出稿前用 `layout-plan` 做**字数配额与版面自查**（字数偏离、末页空洞）；需要配图时用 `fig-render` 出图并在 html 里用 `<figure><img src="图名"/><figcaption>图题</figcaption></figure>` 引用 → advance 到 `content`；
 4. **`cons-build` 建账 → `cons-repair` 给统一口径 → 按 `tasks` 修正各节** → advance 到 `consistency`（带 `ledger_id`）；
 5. `draft` 生成 Word（需要特定排版就带 `--template <模板名>`，章节里可带 `images` 嵌入第 3 步渲染好的配图），把 `files[].url` 交给用户 → advance 到 `draft`（带 `files`）；
 6. 从招标文件抽取废标项 → `reject-init` → 逐片段 `reject-apply` → `reject-finalize` → `reject-export`，把风险清单（尤其**已确认**项）与 xlsx 链接交给用户 → advance 到 `rejection`（带 `rejection_session_id`）。

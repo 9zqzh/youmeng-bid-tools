@@ -12,6 +12,7 @@
   GET  /api/figure/types | /status         POST /api/figure/render
   GET  /api/template/presets | /list       POST /api/template/get | /save | /delete
   GET  /api/html/spec                      POST /api/html/validate
+  GET  /api/layout/metrics                 POST /api/layout/plan
 
 子命令：
   list                                           列出企业资质清单
@@ -49,6 +50,10 @@
   template-delete --name X                       删除自定义模板
   html-spec                                      受限 HTML 白名单与示例
   html-validate --html <字符串|@文件>            校验一段受限 HTML（出稿前先自查）
+  layout-metrics [--template <名>]               算出一套模板下每页能装多少字
+  layout-plan   --sections <JSON|@file> [--template <名>] [--total-words N]
+                [--section-words N] [--min-words N] [--max-words N]
+                                                 字数配额 + 版面估算 + 偏差与建议
 
 仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
 
@@ -199,6 +204,17 @@ def main() -> int:
     p_hv = sub.add_parser("html-validate", help="校验一段受限 HTML")
     p_hv.add_argument("--html", required=True, help="HTML 字符串或 @文件")
 
+    p_lm = sub.add_parser("layout-metrics", help="算出一套模板下每页能装多少字")
+    p_lm.add_argument("--template", default="", help="导出模板名（默认 standard）")
+
+    p_lp = sub.add_parser("layout-plan", help="字数配额 + 版面估算 + 偏差与建议")
+    p_lp.add_argument("--sections", required=True, help="小节数组 JSON 或 @file")
+    p_lp.add_argument("--template", default="", help="导出模板名（默认 standard）")
+    p_lp.add_argument("--total-words", type=int, default=0, help="总目标字数（按各节 weight 分配）")
+    p_lp.add_argument("--section-words", type=int, default=0, help="每节统一目标字数")
+    p_lp.add_argument("--min-words", type=int, default=0, help="单节目标下限")
+    p_lp.add_argument("--max-words", type=int, default=0, help="单节目标上限")
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -285,6 +301,15 @@ def main() -> int:
         result = _request("GET", "/api/html/spec")
     elif args.command == "html-validate":
         result = _request("POST", "/api/html/validate", {"html": _load_text_arg(args.html)})
+    elif args.command == "layout-metrics":
+        result = _request("GET", f"/api/layout/metrics?template={args.template}")
+    elif args.command == "layout-plan":
+        payload = {"sections": _load_json_arg(args.sections), "template": args.template or None}
+        for key, value in (("total_words", args.total_words), ("section_words", args.section_words),
+                           ("min_words", args.min_words), ("max_words", args.max_words)):
+            if value:
+                payload[key] = value
+        result = _request("POST", "/api/layout/plan", payload)
     else:
         result = _request("POST", "/api/project/advance", {
             "project_id": args.project_id,
