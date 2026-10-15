@@ -11,6 +11,7 @@
   POST /api/project/init | /advance        GET /api/project/state | /next | /stages
   GET  /api/figure/types | /status         POST /api/figure/render
   GET  /api/template/presets | /list       POST /api/template/get | /save | /delete
+  GET  /api/html/spec                      POST /api/html/validate
 
 子命令：
   list                                           列出企业资质清单
@@ -46,6 +47,8 @@
   template-get  [--template <名>]                把预设/模板名解析成完整配置
   template-save --name X --template <JSON|@file> 保存自定义导出模板
   template-delete --name X                       删除自定义模板
+  html-spec                                      受限 HTML 白名单与示例
+  html-validate --html <字符串|@文件>            校验一段受限 HTML（出稿前先自查）
 
 仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
 
@@ -89,6 +92,13 @@ def _load_json_arg(value: str):
     if value.startswith("@"):
         return json.loads(open(value[1:], encoding="utf-8").read())
     return json.loads(value)
+
+
+def _load_text_arg(value: str) -> str:
+    """HTML 等纯文本参数：支持 @文件 或直接给字符串。"""
+    if value.startswith("@"):
+        return open(value[1:], encoding="utf-8").read()
+    return value
 
 
 def main() -> int:
@@ -185,6 +195,10 @@ def main() -> int:
     p_td = sub.add_parser("template-delete", help="删除自定义模板")
     p_td.add_argument("--name", required=True)
 
+    sub.add_parser("html-spec", help="受限 HTML 的白名单与示例（写 sections[].html 前先看）")
+    p_hv = sub.add_parser("html-validate", help="校验一段受限 HTML")
+    p_hv.add_argument("--html", required=True, help="HTML 字符串或 @文件")
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -267,6 +281,10 @@ def main() -> int:
             "name": args.name, "template": _load_json_arg(args.template)})
     elif args.command == "template-delete":
         result = _request("POST", "/api/template/delete", {"name": args.name})
+    elif args.command == "html-spec":
+        result = _request("GET", "/api/html/spec")
+    elif args.command == "html-validate":
+        result = _request("POST", "/api/html/validate", {"html": _load_text_arg(args.html)})
     else:
         result = _request("POST", "/api/project/advance", {
             "project_id": args.project_id,

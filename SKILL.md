@@ -1,6 +1,6 @@
 ---
 name: youmeng-bid-tools
-description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、把流程图/思维导图/甘特图/架构图/柱状图等**配图渲染成 PNG**、用**导出模板**控制两册 Word 的排版（纸张/字体字号/标题样式/表格/页眉页脚/页码）、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、给标书画流程图或图表、调整标书 Word 排版或套用模板、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
+description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、把流程图/思维导图/甘特图/架构图/柱状图等**配图渲染成 PNG**、用**导出模板**控制两册 Word 的排版（纸张/字体字号/标题样式/表格/页眉页脚/页码）、用**受限 HTML** 撰写有结构的正文（列表/子标题/表格/图注）、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、给标书画流程图或图表、调整标书 Word 排版或套用模板、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
 ---
 
 # 优盟标书工具
@@ -241,11 +241,43 @@ space_before_pt/space_after_pt）、`table`（style/header_shading/font_size_pt/
 `file` 用 `fig-render` 产出的文件名（也可给绝对路径），`title` 会自动编号成「图 N 标题」；
 表格带 `title` 时同理编号为「表 N 标题」。**没给 title 就不会有题注**（避免给历史产物凭空加题注）。
 
+### 9) 受限 HTML 正文（表达力最强，推荐）
+
+`content` 是纯文本按换行拆段落，表达不了列表 / 子标题 / 表格 / 图注。要写**有结构**的正文，用 `sections[].html`：
+
+```bash
+python scripts/bid_tools.py html-spec                        # 先看白名单与示例
+python scripts/bid_tools.py html-validate --html @body.html  # 出稿前自查
+```
+
+```json
+[
+  {"title": "技术方案", "volume": "business_technical",
+   "html": "<p>本节说明<strong>实施要点</strong>。</p><h2>组织架构</h2><ul><li>项目经理 1 人</li></ul><table data-caption=\"人员配置\"><thead><tr><th>岗位</th><th>人数</th></tr></thead><tbody><tr><td>项目经理</td><td>1</td></tr></tbody></table><figure><img src=\"flow.png\"/><figcaption>评标流程</figcaption></figure>"},
+  {"title": "报价说明", "volume": "price", "content": "见附表"}
+]
+```
+
+| 支持 | 说明 |
+| --- | --- |
+| `p` / `br` | 段落与换行 |
+| `h2` `h3` `h4` | 正文子标题（**`h1` 会被拒**：章节标题由 `sections[].title` 提供）|
+| `ul` `ol` `li` | 项目符号 / 编号列表 |
+| `table` + `thead`/`tbody`/`tr`/`th`/`td` | 表格；`table[data-caption]` 给表题，表头行用 `th`，`colspan` 支持 |
+| `figure` + `img` + `figcaption` | 图片与图注；`img[src]` 用 `fig-render` 产出的图片名 |
+| `strong` `b` `em` `i` `u` `s` `sup` `sub` | 行内格式 |
+
+**明确不支持**（越界会**精确报错**，不会静默删掉）：`h1`、`rowspan`、`ol[start]`、`style` / `class`、
+`script`/`iframe`/`svg` 等。题注只在给了 `data-caption` / `figcaption` 时生成并自动编号。
+
+> `html` 与 `content` **二选一，html 优先**（同时给会按 html 渲染并在 warnings 里提示）。
+> **务必先 `html-validate` 再出稿**：校验不过 `draft` 会直接报错（带具体是哪处、该怎么改），白跑一轮。
+
 ## 典型工作流（项目驱动）
 0. `project-init` 建项目；之后**每步先 `project-next` 问下一步、做完用 `project-advance` 交产物**；
 1. `list` 了解企业有哪些资质 → 从招标文件提炼要求 → `match` 逐条比对，汇总「门槛缺口 / 待补充」→ advance 到 `analysis` 完成态；
 2. **`facts-init` 固化全局事实**（处理掉 issues）→ advance 到 `facts`（带 `facts_id`）；
-3. **`facts-render` 逐节注入** → 撰写 `sections`；需要配图时用 `fig-render` 出图并记下 `url` → advance 到 `content`；
+3. **`facts-render` 逐节注入** → 撰写各节正文（推荐用 `sections[].html` 写有结构的正文，先 `html-spec` 看白名单、`html-validate` 自查）；需要配图时用 `fig-render` 出图并在 html 里用 `<figure><img src="图名"/><figcaption>图题</figcaption></figure>` 引用 → advance 到 `content`；
 4. **`cons-build` 建账 → `cons-repair` 给统一口径 → 按 `tasks` 修正各节** → advance 到 `consistency`（带 `ledger_id`）；
 5. `draft` 生成 Word（需要特定排版就带 `--template <模板名>`，章节里可带 `images` 嵌入第 3 步渲染好的配图），把 `files[].url` 交给用户 → advance 到 `draft`（带 `files`）；
 6. 从招标文件抽取废标项 → `reject-init` → 逐片段 `reject-apply` → `reject-finalize` → `reject-export`，把风险清单（尤其**已确认**项）与 xlsx 链接交给用户 → advance 到 `rejection`（带 `rejection_session_id`）。

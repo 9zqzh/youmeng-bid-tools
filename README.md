@@ -32,6 +32,8 @@
 | `template-get` | 把预设/模板名解析成完整配置（便于微调）|
 | `template-save` | 保存自定义导出模板（可 `base` 继承预设）|
 | `template-delete` | 删除自定义模板 |
+| `html-spec` | 受限 HTML 正文的白名单与示例（写正文前先看）|
+| `html-validate` | 校验一段受限 HTML（出稿前自查）|
 
 ## 目录结构
 
@@ -103,6 +105,10 @@ python scripts/bid_tools.py template-presets
 python scripts/bid_tools.py template-get --template a4-visual
 python scripts/bid_tools.py template-save --name house-style --template @tpl.json
 python scripts/bid_tools.py draft --project "XX项目" --sections @s.json --template house-style
+
+# 9) 受限 HTML 正文：先看白名单，再自查
+python scripts/bid_tools.py html-spec
+python scripts/bid_tools.py html-validate --html @body.html
 ```
 
 输出均为 JSON：
@@ -124,6 +130,27 @@ python scripts/bid_tools.py draft --project "XX项目" --sections @s.json --temp
 - `template-presets` → `{presets:[{name,label,description,paper,orientation,body_size_pt}], fields}`
 - `template-get` / `template-save` → `{name, label, template:{...}}`
 - `template-list` → `{templates:[...], presets:[...]}`
+- `html-spec` → `{block_tags, heading_tags, inline_tags, attributes, not_supported, example, rules}`
+- `html-validate` → `{ok, issues:[{level,kind,message,tag,attr}], stats, message}`
+
+## 受限 HTML 正文
+
+`sections[].content` 是纯文本按换行拆段落，表达不了列表 / 子标题 / 表格 / 图注。
+要写有结构的正文就用 `sections[].html`，由程序**校验白名单后确定性转 Word**（不经 LibreOffice 往返）。
+
+| 支持 | 说明 |
+| --- | --- |
+| `p` / `br` | 段落与换行 |
+| `h2` `h3` `h4` | 正文子标题（`h1` 会被拒：章节标题由 `sections[].title` 提供）|
+| `ul` `ol` `li` | 项目符号 / 编号列表 |
+| `table` + `thead`/`tbody`/`tr`/`th`/`td` | 表格；`table[data-caption]` 给表题，`colspan` 支持 |
+| `figure` + `img` + `figcaption` | 图片与图注；`img[src]` 用 `fig-render` 产出的图片名 |
+| `strong` `b` `em` `i` `u` `s` `sup` `sub` | 行内格式 |
+
+**越界精确报错、不静默删掉**：`h1` / `rowspan` / `ol[start]` / `style` / `class` / `script` 等都会返回
+带位置与修改建议的 issue。所以**先 `html-validate` 再出稿**；校验不过 `draft` 会直接报错。
+
+`html` 与 `content` **二选一，html 优先**（同时给会按 html 渲染并在 warnings 提示）。
 
 ## 导出模板（Word 排版）
 
@@ -243,6 +270,8 @@ python scripts/bid_tools.py draft --project "XX项目" --sections @s.json --temp
 | POST | `/api/template/get` | 解析预设/模板为完整配置 |
 | POST | `/api/template/save` | 保存自定义模板 |
 | POST | `/api/template/delete` | 删除自定义模板 |
+| GET  | `/api/html/spec` | 受限 HTML 白名单与示例 |
+| POST | `/api/html/validate` | 校验受限 HTML |
 | GET  | `/files/{name}`        | 下载生成的 docx / xlsx / png（png 在 figures/ 子目录）|
 
 ## 说明与边界
