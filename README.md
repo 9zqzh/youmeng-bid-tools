@@ -1,6 +1,6 @@
 # 优盟标书工具 · youmeng-bid-tools
 
-一个 **HTTP 瘦客户端技能**：查询企业资质清单、把招标要求与企业资质逐条比对、生成投标文件两册 Word 初稿。
+一个 **HTTP 瘦客户端技能**：查询企业资质清单、把招标要求与企业资质逐条比对、对投标文件做废标项/无效标检查、生成投标文件两册 Word 初稿。
 **不依赖任何本机代码或资质文件**——只用 Python 标准库，通过 HTTP 调用「优盟标书工具服务」（bid-mcp）。
 
 ## 功能
@@ -10,14 +10,28 @@
 | `list`  | 列出企业资质清单（id / 名称 / 类别 / 有效期 / 关键词）|
 | `match` | 招标要求 × 资质 **逐条比对**：满足 / 待补充 / 不满足 / 不适用 |
 | `draft` | 生成 **商务技术册 + 报价册** Word 初稿（服务端嵌入资质原件）|
+| `reject-init` | 创建**废标项检查会话**（传入从招标文件抽取的无效投标 / 废标项清单）|
+| `reject-apply` | 提交**一个片段的检查增量**（证据 / 新增待定风险 / 更新 / 解除 / 确认）|
+| `reject-finalize` | 收尾：合并去重、按严重度排序，输出报告 |
+| `reject-export` | 导出 **xlsx 检查报告**（检查概览 / 废标项 / 待定风险）|
+| `reject-state` | 查看会话当前完整状态（排查用）|
+| `facts-init` | 建立**全局事实清单**（自动注入资质清单的企业主体信息作为锁定事实）|
+| `facts-update` | 人工评审后按 id 全量替换事实清单 |
+| `facts-render` | 取事实**注入块**（逐节生成正文时完整注入，保证各节一致）|
+| `cons-build` | 一致性审计：把各节上报的类型化事实归集成台账，找出**跨节冲突**与**违反全局事实**的取值 |
+| `cons-repair` | 一致性审计：按统一口径生成**逐节修复任务** |
+| `project-init` | 创建**标书项目**，把全链路产物收拢到一个 `project_id` |
+| `project-state` | 查看项目：当前阶段 / 各阶段状态（done / accepted / blocked / pending）/ 关卡结论 |
+| `project-next` | 问「下一步该做什么」，直接给阶段指引与要带的产物 |
+| `project-advance` | 声明某阶段完成并推进，**带关卡校验**（不达标拒绝；`--force` 可跳过并留痕）|
 
 ## 目录结构
 
 ```
 youmeng-bid-tools/
-├── SKILL.md               # Skill 定义（名称、触发词、用法）
+├── SKILL.md               # Skill 定义（名称、触发词、用法、硬规则）
 └── scripts/
-    └── bid_tools.py       # list / match / draft 三个子命令（纯标准库）
+    └── bid_tools.py       # 全部子命令（纯标准库）
 ```
 
 ## 前置
@@ -41,11 +55,93 @@ python scripts/bid_tools.py draft \
   --project "江苏银行深圳分行宣传品供应商入围项目" \
   --sections '[{"title":"投标函","content":"致：（招标人）\n我方参加本项目投标。","volume":"business_technical"}]' \
   --qualifications q015,q006
+
+# 4) 废标项检查：建档 → 逐片段提交 → 收尾 → 导出
+python scripts/bid_tools.py reject-init \
+  --project "XX项目" --bid-no "B-2026-001" \
+  --items '[{"title":"未按第六章格式提交投标函","requirement":"投标函须按第六章格式填写"}]' \
+  --documents '[{"name":"投标文件.pdf","chunk_total":6}]'
+
+python scripts/bid_tools.py reject-apply --session rej-20261015-ab12cd34 --patch @patch.json
+
+python scripts/bid_tools.py reject-finalize --session rej-20261015-ab12cd34
+python scripts/bid_tools.py reject-export   --session rej-20261015-ab12cd34
+
+# 5) 全局事实：写正文前固化，写完后做一致性审计
+python scripts/bid_tools.py facts-init --project "XX项目" \
+  --facts '[{"category":"日期与期限","name":"质保期","value":"一年"}]'
+
+python scripts/bid_tools.py facts-render --facts-id facts-20261015-xxxxxxxx
+
+python scripts/bid_tools.py cons-build --facts-id facts-20261015-xxxxxxxx \
+  --sections @sections.json --extractions @extractions.json
+
+python scripts/bid_tools.py cons-repair --ledger led-20261015-xxxxxxxx \
+  --rules '[{"target":"质保期","value":"一年"}]'
+
+# 6) 项目工作流：把全链路串起来（推荐入口）
+python scripts/bid_tools.py project-init --project "XX项目" --bid-no "B-2026-001"
+python scripts/bid_tools.py project-next  --project-id prj-20261015-xxxxxxxx
+python scripts/bid_tools.py project-advance --project-id prj-20261015-xxxxxxxx \
+  --stage facts --artifacts '{"facts_id":"facts-20261015-xxxxxxxx"}'
+python scripts/bid_tools.py project-state --project-id prj-20261015-xxxxxxxx
 ```
 
 输出均为 JSON：
 - `match` → `{company, results:[{requirement_id,status,matched_qualification_names,reason}], summary:{...}}`
 - `draft` → `{company, files:[{name,url}], warnings}`（`url` 即下载链接）
+- `reject-init` → `{session_id, checklist, documents, stats}`
+- `reject-apply` → `{round, applied:{...}, rejected:[{kind,reason}], stats, cursor}`
+- `reject-finalize` → `{summary, findings, pending, resolved, checklist, warnings}`
+- `reject-export` → `{name, url}`
+- `facts-init` / `facts-update` → `{facts_id, facts, issues, rendered, ok}`
+- `facts-render` → `{facts_id, rendered, count}`
+- `cons-build` → `{ledger_id, fact_table, conflicts, issues, summary}`
+- `cons-repair` → `{tasks:[{section_id,title,instructions}], unresolved, unused_rules, summary}`
+- `project-init` / `project-state` / `project-advance` → `{project_id, stage, stages[], artifacts, blockers, warnings, can_advance, next}`
+- `project-next` → `{action, stage, label, guide, advance_with}`
+
+## 项目工作流（把全链路串成一条带关卡的可续跑链路）
+
+问题：整条链路每个阶段的产物是一个 id（`facts_id` / `ledger_id` / `files` / `rejection_session_id`），
+全靠模型自己记、自己保证顺序。一旦漏做「全局事实」就直接写正文，各节数据必然互相打架，而且要到成品才暴露。
+
+做法：把这些产物收进一个 `project_id`，并在 `project-advance` 时**真的去校验**产物是否达标。
+
+| 阶段 | 产物 | 放行条件 |
+| --- | --- | --- |
+| `analysis` | — | 起始阶段 |
+| `facts` | `facts_id` | 事实清单非空、无未落实占位符 |
+| `content` | — | 前置阶段达标 |
+| `consistency` | `ledger_id` | 已给统一口径、无未解决冲突 |
+| `draft` | `files` | Word 文件确实存在于服务端 |
+| `rejection` | `rejection_session_id` | 废标项检查已 `finished` |
+
+阶段状态：`done`（达标）/ `accepted`（曾 `--force` 跳过，产物仍未达标，显式标出）/ `blocked`（未达标）/ `pending`。
+`--force` 只豁免**当前阶段**；且豁免绑定产物**内容指纹**，内容一变即失效；前置阶段未达标要一级一级确认。
+
+## 全局事实与一致性审计的设计取舍
+
+**为什么把比对放到服务端**：几十节的标书不可能塞进一次模型调用去「通读比较」。所以让模型**并发逐节抽取类型化事实**（人员与数量 / 日期与期限 / 金额 / 技术参数…），程序把各节事实按 (分类, 名称) 归集成台账，再判冲突。既可靠、可复现，也能覆盖长文档。
+
+**去噪是设计出来的，不是靠提示词**：只比较类型化事实，用词、称谓、文风、篇幅、承诺语气强弱**根本不进入比较**，因此不会产生噪音问题。
+
+**事实分类**：企业主体 / 人员与数量 / 日期与期限 / 频次与时限 / 地点与范围 / 金额 / 技术参数 / 编号与名称 / 责任归属 / 其他。
+
+**锁定事实**：`facts-init` 会自动把资质清单里的企业名称 / 统一社会信用代码 / 法定代表人注入为**锁定事实**，模型提交冲突值会被标 `locked_conflict` 并以清单为准。
+
+**空值与占位符**：含「待补充 / 待确认 / XXX」等未落定值会被 `lint` 标出，不能靠它写正文。
+
+## 废标项检查的硬规则
+
+服务端（不是本脚本）维护权威状态，并对模型输出做强制约束：
+
+1. **「缺失 / 未响应」类结论不能直接确认** → 自动降级为「待定」（后续片段可能推翻）。
+2. **没有 `bid_evidence` 的条目不能确认**。
+3. **结构性线索保护**：证据含「目录 / 章节标题 / 附件 / 清单 / 页码」时不得判定缺失。
+4. 纸质/线下事项（密封、纸质、现场递交、签章等）自动标为 `applicable=false`，排除出检查范围。
+
+所以正确姿势是：**先广撒网进 `pending_risk_adds`，拿到确凿原文再用 `pending_risk_updates` 升级**。
 
 ## 作为 Skill 安装
 
@@ -60,7 +156,22 @@ python scripts/bid_tools.py draft \
 | GET  | `/api/qualifications` | 资质清单 |
 | POST | `/api/qualify-match`   | 要求 × 资质比对 |
 | POST | `/api/generate-draft`  | 生成两册 Word，返回下载链接 |
-| GET  | `/files/{name}`        | 下载生成的 docx |
+| POST | `/api/rejection/init`  | 创建废标项检查会话 |
+| POST | `/api/rejection/apply` | 提交一个片段的检查增量 |
+| POST | `/api/rejection/finalize` | 收尾并输出报告 |
+| POST | `/api/rejection/export` | 导出 xlsx 报告 |
+| GET  | `/api/rejection/state` | 查看会话状态 |
+| POST | `/api/facts/init` | 建立全局事实清单（注入锁定事实）|
+| POST | `/api/facts/update` | 全量替换事实清单 |
+| POST | `/api/facts/render` | 取事实注入块 |
+| POST | `/api/consistency/build` | 建立一致性台账、找冲突 |
+| POST | `/api/consistency/repair` | 生成逐节修复任务 |
+| POST | `/api/project/init` | 创建标书项目 |
+| GET  | `/api/project/state` | 项目状态（阶段 / 产物 / 关卡）|
+| GET  | `/api/project/next` | 下一步该做什么 |
+| POST | `/api/project/advance` | 声明阶段完成并推进（关卡校验）|
+| GET  | `/api/project/stages` | 阶段定义 |
+| GET  | `/files/{name}`        | 下载生成的 docx / xlsx |
 
 ## 说明与边界
 
@@ -68,3 +179,4 @@ python scripts/bid_tools.py draft \
 - `draft` 必须提供 `--sections`；`--final` 且存在待补项时会拒绝导出。
 - 报「无法连接 …」：检查 `BID_API_BASE` 是否指向可达的 bid-mcp 服务。
 - Word 的目录与页码需在 Word 中「更新域」；缺失的原件需人工补齐。
+- 废标项检查的**待定项不是结论**，须人工核对原文；只有「已确认风险」带证据支撑。

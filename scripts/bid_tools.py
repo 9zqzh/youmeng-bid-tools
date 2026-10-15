@@ -5,12 +5,37 @@
   GET  /api/qualifications
   POST /api/qualify-match
   POST /api/generate-draft
+  POST /api/rejection/init | /apply | /finalize | /export     GET /api/rejection/state
+  POST /api/facts/init | /update | /render
+  POST /api/consistency/build | /repair
+  POST /api/project/init | /advance        GET /api/project/state | /next | /stages
 
 子命令：
   list                                           列出企业资质清单
   match  --requirements <JSON|@file>             招标要求 × 资质逐条比对
   draft  --project <名称> --sections <JSON|@file> [--qualifications q15,q06]
          [--bid-no X] [--final]                   生成两册 Word 初稿
+  reject-init   --items <JSON|@file> [--project X] [--bid-no X] [--documents <JSON|@file>]
+                                                 创建废标项检查会话
+  reject-apply  --session <id> --patch <JSON|@file>
+                                                 提交一个片段的检查增量
+  reject-finalize --session <id>                 收尾并输出检查报告
+  reject-export --session <id>                   导出废标项检查 xlsx
+  reject-state  --session <id>                   查看会话当前状态
+  facts-init    --facts <JSON|@file> [--project X] [--bid-no X] [--no-manifest]
+                                                 建立「全局事实」清单（注入资质清单锁定事实）
+  facts-update  --facts-id <id> --facts <JSON|@file> [--no-manifest]
+                                                 人工评审后全量替换事实清单
+  facts-render  --facts-id <id>                  取事实注入块（逐节生成正文时用）
+  cons-build    --sections <JSON|@file> --extractions <JSON|@file> [--facts-id X]
+                                                 一致性审计：建立台账并找出冲突
+  cons-repair   --ledger <id> --rules <JSON|@file>
+                                                 一致性审计：按统一口径生成逐节修复任务
+  project-init  [--project X] [--bid-no X]        创建标书项目（串起全链路）
+  project-state --project-id <id>                查看项目阶段与关卡结论
+  project-next  --project-id <id>                下一步该做什么
+  project-advance --project-id <id> --stage <key> [--artifacts <JSON|@file>] [--force]
+                                                 声明某阶段完成并推进（带关卡校验）
 
 仅用 Python 标准库（urllib），无需 pip 安装任何依赖。
 
@@ -71,6 +96,65 @@ def main() -> int:
     p_draft.add_argument("--bid-no", default="")
     p_draft.add_argument("--final", action="store_true")
 
+    p_ri = sub.add_parser("reject-init", help="创建废标项检查会话")
+    p_ri.add_argument("--items", required=True, help="无效投标/废标项清单数组 JSON 或 @file")
+    p_ri.add_argument("--project", default="", help="项目名称")
+    p_ri.add_argument("--bid-no", default="")
+    p_ri.add_argument("--documents", default="", help="待检查投标文件数组 JSON 或 @file")
+
+    p_ra = sub.add_parser("reject-apply", help="提交一个片段的检查增量")
+    p_ra.add_argument("--session", required=True, help="会话 id（reject-init 返回）")
+    p_ra.add_argument("--patch", required=True, help="增量 patch 对象 JSON 或 @file")
+
+    p_rf = sub.add_parser("reject-finalize", help="收尾并输出检查报告")
+    p_rf.add_argument("--session", required=True)
+
+    p_re = sub.add_parser("reject-export", help="导出废标项检查 xlsx")
+    p_re.add_argument("--session", required=True)
+
+    p_rs = sub.add_parser("reject-state", help="查看会话当前状态")
+    p_rs.add_argument("--session", required=True)
+
+    p_fi = sub.add_parser("facts-init", help="建立全局事实清单")
+    p_fi.add_argument("--facts", required=True, help="事实数组 JSON 或 @file")
+    p_fi.add_argument("--project", default="", help="项目名称")
+    p_fi.add_argument("--bid-no", default="")
+    p_fi.add_argument("--no-manifest", action="store_true", help="不注入资质清单的企业主体信息")
+
+    p_fu = sub.add_parser("facts-update", help="按 id 全量替换事实清单")
+    p_fu.add_argument("--facts-id", required=True)
+    p_fu.add_argument("--facts", required=True, help="事实数组 JSON 或 @file")
+    p_fu.add_argument("--no-manifest", action="store_true")
+
+    p_fr = sub.add_parser("facts-render", help="取全局事实注入块（逐节生成正文时用）")
+    p_fr.add_argument("--facts-id", required=True)
+
+    p_cb = sub.add_parser("cons-build", help="一致性审计：建立台账并找出冲突")
+    p_cb.add_argument("--sections", required=True, help="小节数组 JSON 或 @file")
+    p_cb.add_argument("--extractions", required=True, help="逐节抽取结果数组 JSON 或 @file")
+    p_cb.add_argument("--facts-id", default="", help="可选：关联全局事实以检出与全局冲突")
+
+    p_cr = sub.add_parser("cons-repair", help="一致性审计：按统一口径生成逐节修复任务")
+    p_cr.add_argument("--ledger", required=True, help="cons-build 返回的 ledger_id")
+    p_cr.add_argument("--rules", required=True, help="统一口径数组 JSON 或 @file")
+
+    p_pi = sub.add_parser("project-init", help="创建标书项目（把全链路产物收拢到一个 project_id）")
+    p_pi.add_argument("--project", default="", help="项目名称")
+    p_pi.add_argument("--bid-no", default="")
+
+    p_ps = sub.add_parser("project-state", help="查看项目：当前阶段 / 各阶段状态 / 关卡结论")
+    p_ps.add_argument("--project-id", required=True)
+
+    p_pn = sub.add_parser("project-next", help="下一步该做什么（给 Agent 直接消费）")
+    p_pn.add_argument("--project-id", required=True)
+
+    p_pa = sub.add_parser("project-advance", help="声明某阶段已完成并推进（带关卡校验）")
+    p_pa.add_argument("--project-id", required=True)
+    p_pa.add_argument("--stage", required=True,
+                      help="analysis | facts | content | consistency | draft | rejection")
+    p_pa.add_argument("--artifacts", default="", help="产物对象 JSON 或 @file，如 '{\"facts_id\":\"facts-..\"}'")
+    p_pa.add_argument("--force", action="store_true", help="关卡不过也强行推进（会在项目里留痕）")
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -78,13 +162,69 @@ def main() -> int:
     elif args.command == "match":
         result = _request("POST", "/api/qualify-match",
                           {"requirements": _load_json_arg(args.requirements)})
-    else:
+    elif args.command == "draft":
         result = _request("POST", "/api/generate-draft", {
             "project_name": args.project,
             "sections": _load_json_arg(args.sections),
             "qualification_ids": [q.strip() for q in args.qualifications.split(",") if q.strip()],
             "bid_no": args.bid_no,
             "final": args.final,
+        })
+    elif args.command == "reject-init":
+        result = _request("POST", "/api/rejection/init", {
+            "project": {"name": args.project, "bid_no": args.bid_no},
+            "rejection_items": _load_json_arg(args.items),
+            "documents": _load_json_arg(args.documents) if args.documents else [],
+        })
+    elif args.command == "reject-apply":
+        result = _request("POST", "/api/rejection/apply", {
+            "session_id": args.session,
+            "patch": _load_json_arg(args.patch),
+        })
+    elif args.command == "reject-finalize":
+        result = _request("POST", "/api/rejection/finalize", {"session_id": args.session})
+    elif args.command == "reject-export":
+        result = _request("POST", "/api/rejection/export", {"session_id": args.session})
+    elif args.command == "reject-state":
+        result = _request("GET", f"/api/rejection/state?session_id={args.session}")
+    elif args.command == "facts-init":
+        result = _request("POST", "/api/facts/init", {
+            "project": {"name": args.project, "bid_no": args.bid_no},
+            "facts": _load_json_arg(args.facts),
+            "use_manifest": not args.no_manifest,
+        })
+    elif args.command == "facts-update":
+        result = _request("POST", "/api/facts/update", {
+            "facts_id": args.facts_id,
+            "facts": _load_json_arg(args.facts),
+            "use_manifest": not args.no_manifest,
+        })
+    elif args.command == "facts-render":
+        result = _request("POST", "/api/facts/render", {"facts_id": args.facts_id})
+    elif args.command == "cons-build":
+        result = _request("POST", "/api/consistency/build", {
+            "facts_id": args.facts_id,
+            "sections": _load_json_arg(args.sections),
+            "extractions": _load_json_arg(args.extractions),
+        })
+    elif args.command == "cons-repair":
+        result = _request("POST", "/api/consistency/repair", {
+            "ledger_id": args.ledger,
+            "rules": _load_json_arg(args.rules),
+        })
+    elif args.command == "project-init":
+        result = _request("POST", "/api/project/init", {
+            "project": {"name": args.project, "bid_no": args.bid_no}})
+    elif args.command == "project-state":
+        result = _request("GET", f"/api/project/state?project_id={args.project_id}")
+    elif args.command == "project-next":
+        result = _request("GET", f"/api/project/next?project_id={args.project_id}")
+    else:
+        result = _request("POST", "/api/project/advance", {
+            "project_id": args.project_id,
+            "stage": args.stage,
+            "artifacts": _load_json_arg(args.artifacts) if args.artifacts else {},
+            "force": args.force,
         })
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

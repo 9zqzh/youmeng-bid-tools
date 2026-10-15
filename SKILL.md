@@ -1,11 +1,39 @@
 ---
 name: youmeng-bid-tools
-description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、生成投标文件商务技术册与报价册 Word 初稿。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、或依据招标要求起草投标文件 Word 时使用。
+description: 优盟投标工具：查询企业资质清单、把招标要求与企业资质逐条比对（满足/待补充/不满足/不适用）、对投标文件做废标项/无效标检查（逐片段滚动核查、风险分「已确认/待定」、导出 Excel 检查报告）、在写标书前设定「全局事实」并在写完后做全文一致性审计（跨节冲突 + 违反全局事实）、生成投标文件商务技术册与报价册 Word 初稿，并可用「项目工作流」把 招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查 串成一条带关卡的可续跑链路。当用户要分析招标文件的资格/资质要求、核对企业资质能否满足投标条件、查找资质缺口、检查投标文件是否存在废标项/无效标风险、检查标书各章节数据前后矛盾、完整走一遍投标文件编制流程、或依据招标要求起草投标文件 Word 时使用。
 ---
 
 # 优盟标书工具
 
-一个 **HTTP 瘦客户端**技能（仅用 Python 标准库），通过调用「优盟标书工具服务」（bid-mcp）完成：**列出资质 / 资质比对 / 生成两册 Word**。
+一个 **HTTP 瘦客户端**技能（仅用 Python 标准库），通过调用「优盟标书工具服务」（bid-mcp）完成：**列出资质 / 资质比对 / 废标项检查 / 全局事实 / 一致性审计 / 生成两册 Word**。
+
+## 推荐用法：项目工作流（先看这一节）
+
+如果你要**完整走一遍**「招标解读 → 全局事实 → 正文 → 一致性审计 → 两册 Word → 废标项检查」，别自己记那一堆 id —— 用项目工作流把它们收进一个 `project_id`：
+
+```bash
+python scripts/bid_tools.py project-init --project "XX项目" --bid-no "B-2026-001"
+python scripts/bid_tools.py project-next --project-id <prj-id>       # 问「下一步做什么」
+python scripts/bid_tools.py project-advance --project-id <prj-id> \
+  --stage facts --artifacts '{"facts_id":"facts-20261015-xxxxxxxx"}'
+python scripts/bid_tools.py project-state --project-id <prj-id>      # 看阶段状态与关卡结论
+```
+
+**关卡是硬校验的**（不是记个标记就算过），不达标会 `ok=false` 并告诉你具体缺什么：
+
+| 阶段 | 必须带来的产物 | 放行条件 |
+| --- | --- | --- |
+| `analysis` | — | 招标解读与资质比对（起始阶段）|
+| `facts` | `facts_id` | 事实清单非空、无未落实的占位符 |
+| `content` | — | 前置阶段达标 |
+| `consistency` | `ledger_id` | 台账已 `cons-repair` 给出统一口径、无未解决冲突 |
+| `draft` | `files` | Word 文件确实存在于服务端 |
+| `rejection` | `rejection_session_id` | 废标项检查已跑完（`finished`）|
+
+确需跳过本阶段的拦阻项，可加 `--force`：会在项目里**留痕**（`history` 记录 `action: force` 与被跳过的原因），且阶段状态显示为 `accepted` 而不是 `done`；一旦该阶段产物内容再变化，豁免**自动失效**。
+注意 `--force` 只豁免**当前阶段**的问题，前置阶段没达标仍会被拦住（要一级一级确认，避免一次把整条链路的门全踹开）。
+
+**每个子命令也都能单独用**（下面的 1)–6) 节），项目工作流只是把它们串起来并加关卡，不影响单独调用。
 
 ## 前置
 
@@ -46,11 +74,116 @@ python scripts/bid_tools.py draft \
 
 返回 `{company, files:[{name,url}], warnings}`；`files[].url` 即下载链接（`kind` 由服务端按分册生成）。
 
-## 典型工作流
+### 4) 废标项 / 无效标检查（4 步，服务端维护权威状态）
 
-1. `list` 了解企业有哪些资质；
-2. 从招标文件（或已解析文本）提炼要求 → `match` 逐条比对，汇总「门槛缺口 / 待补充」；
-3. 依据要求与命中资质撰写简短 `sections` → `draft` 生成 Word，把 `files[].url` 交给用户。
+**先由你（模型）从招标文件抽取「无效投标 / 废标项」清单**，再交给服务端建档：
+
+```bash
+python scripts/bid_tools.py reject-init \
+  --project "XX项目" --bid-no "B-2026-001" \
+  --items '[{"title":"未按第六章格式提交投标函","requirement":"投标函须按第六章格式填写"},{"title":"投标有效期不足90天","requirement":"投标有效期不少于90天"}]' \
+  --documents '[{"name":"投标文件.pdf","chunk_total":6}]'
+```
+
+返回 `{session_id, checklist:[{id,type,title,scope,applicable}], documents, stats}`。
+注意：纸质/线下事项（密封、纸质、现场递交、签章等）由服务端自动标为 `applicable=false`，不纳入电子检查。
+
+**然后按「文档 × 片段」顺序逐段提交增量**（每次只交本片段的增量，**不要重发整份状态**）：
+
+```bash
+python scripts/bid_tools.py reject-apply --session rej-20261015-ab12cd34 --patch @patch.json
+```
+
+`patch` 的字段（全部可选，按需给）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `document_id` / `chunk_index` / `finished` | 游标：正在检查哪份文件的第几片段、是否全部完成 |
+| `evidence_adds` | `[{checklist_id, locator, quote}]` 摘录到的投标原文证据 |
+| `pending_risk_adds` | 疑似风险（含「没找到 / 未响应」类结论） |
+| `pending_risk_updates` | `[{id, ...}]` 给待定项补证据；补齐后**自动升级**为已确认 |
+| `pending_risk_resolves` | `[{id, resolution}]` 后续片段已排除该疑点 |
+| `confirmed_risk_adds` | 直接确认的风险（必须带 `bid_evidence`） |
+
+风险条目字段：`{checklist_id?, type?, severity: high|medium|low, title, requirement（检查依据）, bid_evidence（投标原文证据）, risk_reason, suggestion}`。
+
+返回 `{round, applied:{...计数}, rejected:[{kind,reason}], stats, cursor}`。**务必检查 `rejected`**，按 reason 修正后重交。
+
+```bash
+python scripts/bid_tools.py reject-finalize --session <id>   # 收尾：去重排序，输出 findings/pending/summary
+python scripts/bid_tools.py reject-export   --session <id>   # 导出 xlsx（检查概览/废标项/待定风险），返回下载链接
+python scripts/bid_tools.py reject-state    --session <id>   # 查看当前完整状态（排查用）
+```
+
+## 三条硬规则（服务端强制执行，别试图绕过）
+
+1. **「缺失 / 未响应」类结论不能直接确认**。服务端会把它降级为「待定」，因为文件后续片段可能包含对应内容。补到可引用的投标原文后，用 `pending_risk_updates` 升级。
+2. **没有投标证据（`bid_evidence`）的条目不能确认**，只会被降级或拒绝。
+3. **结构性线索保护**：若证据里出现「目录 / 章节标题 / 附件 / 清单 / 页码」等线索，不得据此判定缺失——同样降级为待定。
+
+因此：**先广撒网进 `pending_risk_adds`，找到确凿原文再升级**，比一开始就硬报 `confirmed` 更有效。
+
+### 5) 全局事实（**写正文之前**先做）
+
+各节若各自生成，人员数、工期、质保期、金额、型号会互相打架。先固化一份权威事实清单：
+
+```bash
+python scripts/bid_tools.py facts-init \
+  --project "XX项目" \
+  --facts '[{"category":"日期与期限","name":"质保期","value":"一年"},{"category":"人员与数量","name":"项目经理","value":"1 人"}]'
+```
+
+返回 `{facts_id, facts, issues, rendered, ok}`：
+- 服务端会**自动注入资质清单的企业主体信息**（名称 / 统一社会信用代码 / 法定代表人）作为**锁定事实**，你不得改写；提交冲突值会返回 `locked_conflict`。
+- `issues` 里的 `placeholder`（含「待补充」等未落定值）与 `duplicate_conflict` **必须先处理**。
+- `ok=false` 时不要把 `rendered` 拿去写正文。
+
+人工评审后修正并回填：
+
+```bash
+python scripts/bid_tools.py facts-update --facts-id <id> --facts @facts.json
+python scripts/bid_tools.py facts-render --facts-id <id>     # 取逐字节一致的注入块
+```
+
+**生成每一节正文时，把 `rendered` 完整注入**，并声明「与全局事实冲突即为错误」。
+
+### 6) 一致性审计（**写正文之后**做）
+
+你**并发核对每个小节**，只上报两类问题与本节的**类型化事实取值**；服务端负责比对：
+
+```bash
+python scripts/bid_tools.py cons-build --facts-id <id> --sections @sections.json --extractions @extractions.json
+```
+
+`extractions` 每项：`{section_id, facts:[{category,name,value,quote}], issues:[{type:"与全局事实冲突"|"小节内部矛盾", detail, quote}]}`。
+
+返回 `{ledger_id, fact_table, conflicts, issues, summary}`。服务端会自动找出：
+- **跨节同名不同取值**（如两节分别写「质保期一年 / 两年」）；
+- **与全局事实不一致的取值**（锁定事实的违反会被标 `locked=true` 并优先列出）。
+
+> **不要**上报用词、称谓、文风、篇幅、承诺语气强弱的差异——这些不进入比较，报了也只会被忽略。
+
+再由你给出**统一口径**，服务端派发逐节修复任务：
+
+```bash
+python scripts/bid_tools.py cons-repair --ledger <id> --rules '[{"target":"质保期","value":"一年"}]'
+```
+
+返回 `{tasks:[{section_id,title,instructions}], unresolved, unused_rules, summary}`。
+**`unresolved` 非空说明有冲突没给出口径**，必须补齐 `rules` 重跑，直到 `summary.ok=true`。
+然后按 `tasks[].instructions` 逐节改写对应小节，改完可再跑一次 `cons-build` 复核。
+
+## 典型工作流（项目驱动）
+
+0. `project-init` 建项目；之后**每步先 `project-next` 问下一步、做完用 `project-advance` 交产物**；
+1. `list` 了解企业有哪些资质 → 从招标文件提炼要求 → `match` 逐条比对，汇总「门槛缺口 / 待补充」→ advance 到 `analysis` 完成态；
+2. **`facts-init` 固化全局事实**（处理掉 issues）→ advance 到 `facts`（带 `facts_id`）；
+3. **`facts-render` 逐节注入** → 撰写 `sections` → advance 到 `content`；
+4. **`cons-build` 建账 → `cons-repair` 给统一口径 → 按 `tasks` 修正各节** → advance 到 `consistency`（带 `ledger_id`）；
+5. `draft` 生成 Word，把 `files[].url` 交给用户 → advance 到 `draft`（带 `files`）；
+6. 从招标文件抽取废标项 → `reject-init` → 逐片段 `reject-apply` → `reject-finalize` → `reject-export`，把风险清单（尤其**已确认**项）与 xlsx 链接交给用户 → advance 到 `rejection`（带 `rejection_session_id`）。
+
+若只想做其中一环（例如只查废标项），跳过 `project-*`，直接用对应的单个子命令即可。
 
 ## 注意
 
@@ -58,3 +191,4 @@ python scripts/bid_tools.py draft \
 - `draft` 必须提供 `--sections`；`--final` 且存在待补项时会拒绝导出。
 - 报「无法连接 …」：检查 `BID_API_BASE` 是否指向可达的 bid-mcp 服务（沙箱网络需能访问该地址）。
 - Word 的目录与页码需在 Word 中「更新域」；缺失的原件需人工补齐。
+- 废标项检查的**待定项不是结论**，须人工核对原文；报告中的「已确认风险」才是有证据支撑的结论。
